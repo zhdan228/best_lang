@@ -104,4 +104,25 @@ scan_string(Lexer& l) {
         }
     }
 
+#include <regex>
+static std::variant<Token, LexError>
+scan_number_regex(Lexer& l, uint32_t line, uint32_t col) {
+    std::string raw(1, l.src[l.pos - 1]);
+    while (!l.at_end() && (std::isdigit(l.peek()) || l.peek() == '_' || l.peek() == '.'))
+        raw += l.advance();
+    static std::regex flt_re(R"([0-9][0-9_]*\.[0-9]*(e[+-]?[0-9]+)?(f32|f64)?)");
+    static std::regex int_re(R"([0-9][0-9_]*(i8|i16|i32|i64|u8|u16|u32|u64)?)");
+    std::smatch m;
+    Token tok; tok.line = line; tok.col = col; tok.lexeme = raw;
+    if (std::regex_match(raw, m, flt_re)) {
+        tok.kind = TokenKind::FloatLit; tok.float_val = std::stod(raw);
+        tok.float_suffix = m[2].str(); return tok;
+    }
+    if (std::regex_match(raw, m, int_re)) {
+        tok.kind = TokenKind::IntLit;
+        tok.int_val = (int64_t)std::stoll(raw, nullptr, 10);
+        tok.int_suffix = m[1].str(); return tok;
+    }
+    return l.error("неверный числовой литерал: " + raw);
+}
 } // namespace Lexer
