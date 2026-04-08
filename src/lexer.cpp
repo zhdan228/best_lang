@@ -125,4 +125,27 @@ scan_number_regex(Lexer& l, uint32_t line, uint32_t col) {
     }
     return l.error("неверный числовой литерал: " + raw);
 }
+static int hex_val(char c) {
+    if (c>='0'&&c<='9') return c-'0';
+    if (c>='a'&&c<='f') return c-'a'+10;
+    if (c>='A'&&c<='F') return c-'A'+10;
+    return -1;
+}
+static std::variant<std::string, LexError> scan_string(Lexer& l) {
+    std::string result;
+    while (true) {
+        if (l.at_end()||l.peek()=='\n') return l.error("незакрытый строковый литерал");
+        char c = l.advance();
+        if (c=='"') return result;
+        if (c!='\\') { result+=c; continue; }
+        if (l.at_end()) return l.error("незавершённая escape-последовательность");
+        char e=l.advance();
+        switch(e){
+        case 'n':result+='\n';break; case 't':result+='\t';break;
+        case 'r':result+='\r';break; case '"':result+='"';break;
+        case '\\':result+='\\';break; case '0':result+='\0';break;
+        default: return l.error(std::string("неизвестный escape '\\")+e+"'");
+        }
+    }
+}
 } // namespace Lexer
