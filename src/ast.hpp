@@ -123,3 +123,144 @@ struct TupleLitExpr : Expr {
 };
 
 // ── Инструкции 
+
+struct Stmt {
+    enum class Kind {
+        VarDecl, Assign,
+        ExprStmt,
+        If, While, ForRange, ForC, Block,
+        Break, Continue,
+        Return,
+        Empty
+    };
+    Kind   kind;
+    SrcLoc loc;
+};
+using StmtPtr = std::unique_ptr<Stmt>;
+
+struct BlockStmt : Stmt { std::vector<StmtPtr> stmts; };
+
+// Объявление переменной: var/val name: type = expr
+struct VarDeclStmt : Stmt {
+    std::string  name;
+    TypePtr      ann_type; // аннотация типа (может быть nullptr — тогда выводится)
+    ExprPtr      init;
+    bool         is_val;   // true → val (иммутабельная)
+};
+
+// L-значение для присваивания
+struct LValue {
+    enum class Kind { Ident, Index, Field };
+    Kind kind;
+    SrcLoc loc;
+    std::string name;               // для Ident
+    std::unique_ptr<LValue> base;   // база для Index и Field
+    ExprPtr idx;                    // индекс для Index
+    std::string field;              // имя поля для Field
+    int field_idx = -1;             // индекс поля (заполняется семантикой)
+};
+using LValuePtr = std::unique_ptr<LValue>;
+
+struct AssignStmt : Stmt {
+    LValuePtr target;
+    ExprPtr   value;
+};
+
+struct ExprStmt : Stmt { ExprPtr expr; };
+
+struct IfStmt : Stmt {
+    ExprPtr  cond;
+    StmtPtr  then_branch;
+    StmtPtr  else_branch; // nullptr если нет else
+};
+
+struct WhileStmt : Stmt {
+    ExprPtr cond;
+    StmtPtr body;
+};
+
+// for i in start..end { body }
+struct ForRangeStmt : Stmt {
+    std::string var_name;
+    TypePtr     var_type;  // аннотация типа (обычно int32)
+    ExprPtr     start;
+    ExprPtr     end;
+    StmtPtr     body;
+};
+
+// for init; cond; step { body }
+struct ForCStmt : Stmt {
+    StmtPtr  init;
+    ExprPtr  cond;
+    StmtPtr  step;
+    StmtPtr  body;
+};
+
+struct BreakStmt    : Stmt {};
+struct ContinueStmt : Stmt {};
+struct EmptyStmt    : Stmt {};
+
+struct ReturnStmt : Stmt {
+    ExprPtr value; // nullptr для void-функций
+};
+
+// ── Объявления верхнего уровня 
+
+struct TopDecl {
+    enum class Kind { Fun, Struct, TypeAlias, Namespace, GlobalVar, Impl };
+    Kind   kind;
+    SrcLoc loc;
+};
+using TopDeclPtr = std::unique_ptr<TopDecl>;
+
+struct Param {
+    std::string name;
+    TypePtr     type;
+    SrcLoc      loc;
+};
+
+struct FunDecl : TopDecl {
+    std::string        name;
+    std::vector<Param> params;
+    TypePtr            ret_type;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct FieldDecl {
+    std::string name;
+    TypePtr     type;
+    SrcLoc      loc;
+};
+
+struct StructDecl : TopDecl {
+    std::string             name;
+    std::vector<FieldDecl>  fields;
+};
+
+struct TypeAliasDecl : TopDecl {
+    std::string name;
+    TypePtr     aliased;
+};
+
+struct NamespaceDecl : TopDecl {
+    std::string             name;
+    std::vector<TopDeclPtr> members;
+};
+
+struct GlobalVarDecl : TopDecl {
+    std::string name;
+    TypePtr     ann_type;
+    ExprPtr     init;
+    bool        is_val;
+};
+
+// impl TypeName { fun method(self: TypeName, ...): R { ... } }
+struct ImplDecl : TopDecl {
+    std::string            type_name;
+    std::vector<std::unique_ptr<FunDecl>> methods;
+};
+
+// Программа
+struct Program {
+    std::vector<TopDeclPtr> decls;
+};
