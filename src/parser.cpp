@@ -279,4 +279,17 @@ static ExprPtr parse_postfix(P& p) {
             auto loc = p.loc();
             p.advance();
 
+static int bin_prec(Lexer::TokenKind k) {
+    using TK = Lexer::TokenKind;
+    switch(k) {
+    case TK::Or:      return 3;
+    case TK::And:     return 2;
+    case TK::EqEq: case TK::BangEq:
+    case TK::Lt: case TK::LtEq:
+    case TK::Gt: case TK::GtEq: return 5;
+    case TK::Plus: case TK::Minus: return 6;
+    case TK::Star: case TK::Slash: case TK::Percent: return 7;
+    default: return -1;
+    }
+}
 } // namespace Parser
