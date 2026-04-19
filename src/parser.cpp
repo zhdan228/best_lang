@@ -278,18 +278,200 @@ static ExprPtr parse_postfix(P& p) {
             // вызов функции — позиционные и именованные аргументы
             auto loc = p.loc();
             p.advance();
+            auto call = std::make_unique<CallExpr>();
+            call->kind   = Expr::Kind::Call;
+            call->loc    = loc;
+            call->callee = std::move(e);
+            auto parse_one_arg = [&]() {
+                // именованный аргумент: name = expr
+                if (p.at(TK::Ident) && p.peek(1).kind == TK::Assign) {
+                    auto name_tok = p.advance();
+                    p.advance(); // '='
+                    auto val = parse_expr(p);
+                    NamedArg na;
+                    na.name  = name_tok.lexeme;
+                    na.value = std::move(val);
+                    call->named_args.push_back(std::move(na));
+                } else {
+                    call->args.push_back(parse_expr(p));
+                }
+            };
+            if (!p.at(TK::RParen)) {
+                parse_one_arg();
+                while (p.at(TK::Comma)) {
+                    p.advance();
+                    if (p.at(TK::RParen)) break;
+                    parse_one_arg();
+                }
+            }
+            p.expect(TK::RParen);
+            e = std::move(call);
+        } else if (p.at(TK::LBracket)) {
+            auto loc = p.loc();
+            p.advance();
+            auto idx = std::make_unique<IndexExpr>();
+            idx->kind = Expr::Kind::Index;
+            idx->loc  = loc;
+            idx->arr  = std::move(e);
+            idx->idx  = parse_expr(p);
+            p.expect(TK::RBracket);
+            e = std::move(idx);
+        } else if (p.at(TK::Dot)) {
+            auto loc = p.loc();
+            p.advance();
+            // индекс кортежа: .0, .1, .2
+            if (p.at(TK::IntLit)) {
+                auto idx_tok = p.advance();
+                auto te = std::make_unique<TupleIndexExpr>();
+                te->kind   = Expr::Kind::TupleIndex;
+                te->loc    = loc;
+                te->object = std::move(e);
+                te->index  = static_cast<int>(idx_tok.int_val);
+                e = std::move(te);
+            } else {
+                auto fn_tok = p.expect(TK::Ident);
+                auto fe = std::make_unique<FieldExpr>();
+                fe->kind       = Expr::Kind::Field;
+                fe->loc        = loc;
+                fe->object     = std::move(e);
+                fe->field_name = fn_tok.lexeme;
+                e = std::move(fe);
+            }
+        } else {
+            break;
+        }
+    }
+    return e;
+}
 
-static int bin_prec(Lexer::TokenKind k) {
-    using TK = Lexer::TokenKind;
-    switch(k) {
-    case TK::Or:      return 3;
-    case TK::And:     return 2;
-    case TK::EqEq: case TK::BangEq:
-    case TK::Lt: case TK::LtEq:
-    case TK::Gt: case TK::GtEq: return 5;
-    case TK::Plus: case TK::Minus: return 6;
+static ExprPtr parse_unary(P& p) {
+    if (p.at(TK::Minus)) {
+        auto loc = p.loc();
+        p.advance();
+        auto e = std::make_unique<UnaryOpExpr>();
+        e->kind    = Expr::Kind::UnaryOp;
+        e->loc     = loc;
+        e->op      = UnaryOpKind::Neg;
+        e->operand = parse_unary(p);
+        return e;
+    }
+    return parse_postfix(p);
+}
+
+// Разбор бинарных выражений с приоритетом
+// Операторы сравнения нецепочечные
+//  7: * / %
+//  6: + -
+//  5: == != < > <= >=
+//  4: not  
+//  3: and
+//  2: or
+//  1: as   
+static int bin_prec(TK k) {
+    switch (k) {
     case TK::Star: case TK::Slash: case TK::Percent: return 7;
+    case TK::Plus: case TK::Minus:                   return 6;
+    case TK::EqEq: case TK::BangEq:
+    case TK::Lt:   case TK::LtEq:
+    case TK::Gt:   case TK::GtEq:                   return 5;
+    case TK::And:                                    return 3;
+    case TK::Or:                                     return 2;
     default: return -1;
     }
 }
+static BinOpKind bin_op_kind(TK k) {
+    switch (k) {
+    case TK::Plus:    return BinOpKind::Add;
+    case TK::Minus:   return BinOpKind::Sub;
+    case TK::Star:    return BinOpKind::Mul;
+    case TK::Slash:   return BinOpKind::Div;
+    case TK::Percent: return BinOpKind::Mod;
+    case TK::EqEq:    return BinOpKind::Eq;
+    case TK::BangEq:  return BinOpKind::NEq;
+    case TK::Lt:      return BinOpKind::Lt;
+    case TK::LtEq:    return BinOpKind::Le;
+    case TK::Gt:      return BinOpKind::Gt;
+    case TK::GtEq:    return BinOpKind::Ge;
+    case TK::And:     return BinOpKind::And;
+    case TK::Or:      return BinOpKind::Or;
+    default: throw std::runtime_error("bad bin op");
+    }
+}
+
+static ExprPtr parse_bin(P& p, int min_prec) {
+    if (p.at(TK::Not) && min_prec <= 4) {
+        auto loc = p.loc();
+        p.advance();
+        auto e = std::make_unique<UnaryOpExpr>();
+        e->kind    = Expr::Kind::UnaryOp;
+        e->loc     = loc;
+        e->op      = UnaryOpKind::Not;
+        e->operand = parse_bin(p, 4);
+        return e;
+    }
+
+    auto lhs = parse_unary(p);
+    while (true) {
+        int prec = bin_prec(p.cur().kind);
+        if (prec < min_prec) break;
+            if (prec == 5) {
+            auto loc = p.loc();
+            auto op  = bin_op_kind(p.cur().kind);
+            p.advance();
+            auto rhs = parse_bin(p, prec + 1); // запрет цепочки: требуем строго выше
+            auto e = std::make_unique<BinOpExpr>();
+            e->kind = Expr::Kind::BinOp;
+            e->loc  = loc;
+            e->op   = op;
+            e->lhs  = std::move(lhs);
+            e->rhs  = std::move(rhs);
+            lhs = std::move(e);
+            // после одного сравнения — нельзя ещё одно
+            if (bin_prec(p.cur().kind) == 5)
+                throw p.error(p.cur(), "comparison operators are non-chaining; use parentheses");
+        } else {
+            auto loc = p.loc();
+            auto op  = bin_op_kind(p.cur().kind);
+            p.advance();
+            auto rhs = parse_bin(p, prec + 1);
+            auto e = std::make_unique<BinOpExpr>();
+            e->kind = Expr::Kind::BinOp;
+            e->loc  = loc;
+            e->op   = op;
+            e->lhs  = std::move(lhs);
+            e->rhs  = std::move(rhs);
+            lhs = std::move(e);
+        }
+    }
+    return lhs;
+}
+static ExprPtr parse_expr(P& p) {
+    auto e = parse_bin(p, 2);
+    while (p.at(TK::As)) {
+        auto loc = p.loc();
+        p.advance();
+        auto t = parse_type(p);
+        auto cast = std::make_unique<CastExpr>();
+        cast->kind    = Expr::Kind::Cast;
+        cast->loc     = loc;
+        cast->operand = std::move(e);
+        cast->target  = std::move(t);
+        e = std::move(cast);
+    }
+    return e;
+}
+
+
+static std::unique_ptr<BlockStmt> parse_block(P& p) {
+    auto blk = std::make_unique<BlockStmt>();
+    blk->kind = Stmt::Kind::Block;
+    blk->loc  = p.loc();
+    p.expect(TK::LBrace);
+    while (!p.at(TK::RBrace) && !p.at(TK::Eof))
+        blk->stmts.push_back(parse_stmt(p));
+    p.expect(TK::RBrace);
+    return blk;
+}
+
+
 } // namespace Parser
