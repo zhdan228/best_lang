@@ -473,5 +473,250 @@ static std::unique_ptr<BlockStmt> parse_block(P& p) {
     return blk;
 }
 
+static StmtPtr parse_stmt(P& p) {
+    auto loc = p.loc();
+
+    if (p.at(TK::Semicolon)) {
+        p.advance();
+        auto s = std::make_unique<EmptyStmt>();
+        s->kind = Stmt::Kind::Empty;
+        s->loc  = loc;
+        return s;
+    }
+    
+    if (p.at(TK::LBrace)) return parse_block(p);
+
+    // объявление var/val
+    if (p.at(TK::Var) || p.at(TK::Val)) {
+        bool is_val = p.at(TK::Val);
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        TypePtr ann;
+        if (p.at(TK::Colon)) { p.advance(); ann = parse_type(p); }
+        p.expect(TK::Assign);
+        auto init = parse_expr(p);
+        p.expect(TK::Semicolon);
+        auto s = std::make_unique<VarDeclStmt>();
+        s->kind     = Stmt::Kind::VarDecl;
+        s->loc      = loc;
+        s->name     = name_tok.lexeme;
+        s->ann_type = std::move(ann);
+        s->init     = std::move(init);
+        s->is_val   = is_val;
+        return s;
+    }
+    // if
+    if (p.at(TK::If)) {
+        p.advance();
+        auto cond = parse_expr(p);
+        auto then = parse_block(p);
+        StmtPtr els;
+        if (p.at(TK::Else)) {
+            p.advance();
+            if (p.at(TK::If)) els = parse_stmt(p);
+            else               els = parse_block(p);
+        }
+        auto s = std::make_unique<IfStmt>();
+        s->kind        = Stmt::Kind::If;
+        s->loc         = loc;
+        s->cond        = std::move(cond);
+        s->then_branch = std::move(then);
+        s->else_branch = std::move(els);
+        return s;
+    }
+    // while
+    if (p.at(TK::While)) {
+        p.advance();
+        auto cond = parse_expr(p);
+        auto body = parse_block(p);
+        auto s = std::make_unique<WhileStmt>();
+        s->kind = Stmt::Kind::While;
+        s->loc  = loc;
+        s->cond = std::move(cond);
+        s->body = std::move(body);
+        return s;
+    }
+    // break
+    if (p.at(TK::Break)) {
+        p.advance(); p.expect(TK::Semicolon);
+        auto s = std::make_unique<BreakStmt>();
+        s->kind = Stmt::Kind::Break; s->loc = loc;
+        return s;
+    }
+    // continue
+    if (p.at(TK::Continue)) {
+        p.advance(); p.expect(TK::Semicolon);
+        auto s = std::make_unique<ContinueStmt>();
+        s->kind = Stmt::Kind::Continue; s->loc = loc;
+        return s;
+    }
+    // for i in start..end { }
+    if (p.at(TK::For) && p.peek(1).kind == TK::Ident && p.peek(2).kind == TK::In) {
+        p.advance(); // 'for'
+        auto var_tok = p.advance(); // ident
+        p.advance(); // 'in'
+        auto start = parse_expr(p);
+        p.expect(TK::DotDot);
+        auto end  = parse_expr(p);
+        auto body = parse_block(p);
+        auto s = std::make_unique<ForRangeStmt>();
+        s->kind     = Stmt::Kind::ForRange;
+        s->loc      = loc;
+        s->var_name = var_tok.lexeme;
+        s->start    = std::move(start);
+        s->end      = std::move(end);
+        s->body     = std::move(body);
+        return s;
+    }
+    // for init; cond; step { }
+    if (p.at(TK::For)) {
+        p.advance(); // 'for'
+        // инициализация: var/val или присваивание или выражение
+        StmtPtr init;
+        if (p.at(TK::Var) || p.at(TK::Val)) {
+            bool iv = p.at(TK::Val); p.advance();
+            auto nm = p.expect(TK::Ident);
+            TypePtr ann;
+            if (p.at(TK::Colon)) { p.advance(); ann = parse_type(p); }
+            p.expect(TK::Assign);
+            auto iv_e = parse_expr(p);
+            auto vd = std::make_unique<VarDeclStmt>();
+            vd->kind = Stmt::Kind::VarDecl; vd->loc = loc;
+            vd->name = nm.lexeme; vd->ann_type = std::move(ann);
+            vd->init = std::move(iv_e); vd->is_val = iv;
+            init = std::move(vd);
+        } else {
+            auto e = parse_expr(p);
+            if (p.at(TK::Assign)) {
+                p.advance();
+                auto rhs = parse_expr(p);
+                // строим lvalue from e
+                auto build = [&](ExprPtr& ep) -> LValuePtr {
+                    std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
+                        if (x->kind == Expr::Kind::Ident) {
+                            auto& id = static_cast<IdentExpr&>(*x);
+                            auto lv = std::make_unique<LValue>();
+                            lv->kind = LValue::Kind::Ident; lv->loc = id.loc; lv->name = id.name;
+                            return lv;
+                        }
+                        throw p.error(p.cur(), "invalid for-loop init lvalue");
+                    };
+                    return to_lv(ep);
+                };
+                auto lv = build(e);
+                auto as = std::make_unique<AssignStmt>();
+                as->kind = Stmt::Kind::Assign; as->loc = loc;
+                as->target = std::move(lv); as->value = std::move(rhs);
+                init = std::move(as);
+            } else {
+                auto es = std::make_unique<ExprStmt>();
+                es->kind = Stmt::Kind::ExprStmt; es->loc = loc; es->expr = std::move(e);
+                init = std::move(es);
+            }
+        }
+        p.expect(TK::Semicolon);
+        auto cond = parse_expr(p);
+        p.expect(TK::Semicolon);
+        // шаг: присваивание или выражение
+        StmtPtr step;
+        {
+            auto e = parse_expr(p);
+            if (p.at(TK::Assign)) {
+                p.advance();
+                auto rhs = parse_expr(p);
+                std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
+                    if (x->kind == Expr::Kind::Ident) {
+                        auto& id = static_cast<IdentExpr&>(*x);
+                        auto lv = std::make_unique<LValue>();
+                        lv->kind = LValue::Kind::Ident; lv->loc = id.loc; lv->name = id.name;
+                        return lv;
+                    }
+                    throw p.error(p.cur(), "invalid for-loop step lvalue");
+                };
+                auto lv = to_lv(e);
+                auto as = std::make_unique<AssignStmt>();
+                as->kind = Stmt::Kind::Assign; as->loc = loc;
+                as->target = std::move(lv); as->value = std::move(rhs);
+                step = std::move(as);
+            } else {
+                auto es = std::make_unique<ExprStmt>();
+                es->kind = Stmt::Kind::ExprStmt; es->loc = loc; es->expr = std::move(e);
+                step = std::move(es);
+            }
+        }
+        auto body = parse_block(p);
+        auto s = std::make_unique<ForCStmt>();
+        s->kind = Stmt::Kind::ForC; s->loc = loc;
+        s->init = std::move(init); s->cond = std::move(cond);
+        s->step = std::move(step); s->body = std::move(body);
+        return s;
+    }
+    // return
+    if (p.at(TK::Return)) {
+        p.advance();
+        ExprPtr val;
+        if (!p.at(TK::Semicolon)) val = parse_expr(p);
+        p.expect(TK::Semicolon);
+        auto s = std::make_unique<ReturnStmt>();
+        s->kind  = Stmt::Kind::Return;
+        s->loc   = loc;
+        s->value = std::move(val);
+        return s;
+    }
+    // присваивание или выражение-инструкция
+    auto e = parse_expr(p);
+    if (p.at(TK::Assign)) {
+        // строим lvalue из выражения
+        // только определённые формы допустимы как lvalue
+        auto build_lv = [&](ExprPtr& ep) -> LValuePtr {
+            if (ep->kind == Expr::Kind::Ident) {
+                auto& id = static_cast<IdentExpr&>(*ep);
+                auto lv = std::make_unique<LValue>();
+                lv->kind = LValue::Kind::Ident;
+                lv->loc  = id.loc;
+                lv->name = id.name;
+                return lv;
+            }
+            if (ep->kind == Expr::Kind::Index) {
+                auto base_lv = [&]() -> LValuePtr {
+                    // рекурсивно конвертируем выражение в lvalue
+                    std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
+                        if (x->kind == Expr::Kind::Ident) {
+                            auto& id = static_cast<IdentExpr&>(*x);
+                            auto lv = std::make_unique<LValue>();
+                            lv->kind = LValue::Kind::Ident;
+                            lv->loc  = id.loc;
+                            lv->name = id.name;
+                            return lv;
+                        }
+                        if (x->kind == Expr::Kind::Index) {
+                            auto& ix = static_cast<IndexExpr&>(*x);
+                            auto outer = std::make_unique<LValue>();
+                            outer->kind = LValue::Kind::Index;
+                            outer->loc  = ix.loc;
+                            outer->base = to_lv(ix.arr);
+                            outer->idx  = std::move(ix.idx);
+                            return outer;
+                        }
+                        if (x->kind == Expr::Kind::Field) {
+                            auto& fx = static_cast<FieldExpr&>(*x);
+                            auto outer = std::make_unique<LValue>();
+                            outer->kind  = LValue::Kind::Field;
+                            outer->loc   = fx.loc;
+                            outer->base  = to_lv(fx.object);
+                            outer->field = fx.field_name;
+                            return outer;
+                        }
+                        throw p.error(p.cur(), "invalid assignment target");
+                    };
+                    return to_lv(ep);
+                }();
+                return base_lv;
+            }
+            // рекурсивное преобразование в lvalue
+            std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
+                if (x->kind == Expr::Kind::Ident) {
+                    auto& id = static_cast<IdentExpr&>(*x);
+                    auto lv = std::make_unique<LValue>();
 
 } // namespace Parser
