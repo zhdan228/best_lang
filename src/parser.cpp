@@ -718,5 +718,367 @@ static StmtPtr parse_stmt(P& p) {
                 if (x->kind == Expr::Kind::Ident) {
                     auto& id = static_cast<IdentExpr&>(*x);
                     auto lv = std::make_unique<LValue>();
+                    lv->kind = LValue::Kind::Ident;
+                    lv->loc  = id.loc;
+                    lv->name = id.name;
+                    return lv;
+                }
+                if (x->kind == Expr::Kind::Index) {
+                    auto& ix = static_cast<IndexExpr&>(*x);
+                    auto outer = std::make_unique<LValue>();
+                    outer->kind = LValue::Kind::Index;
+                    outer->loc  = ix.loc;
+                    outer->base = to_lv(ix.arr);
+                    outer->idx  = std::move(ix.idx);
+                    return outer;
+                }
+                if (x->kind == Expr::Kind::Field) {
+                    auto& fx = static_cast<FieldExpr&>(*x);
+                    auto outer = std::make_unique<LValue>();
+                    outer->kind  = LValue::Kind::Field;
+                    outer->loc   = fx.loc;
+                    outer->base  = to_lv(fx.object);
+                    outer->field = fx.field_name;
+                    return outer;
+                }
+                throw p.error(p.cur(), "invalid assignment target");
+            };
+            return to_lv(ep);
+        };
+        auto lv = build_lv(e);
+        p.advance(); // потребляем '='
+        auto rhs = parse_expr(p);
+        p.expect(TK::Semicolon);
+        auto s = std::make_unique<AssignStmt>();
+        s->kind   = Stmt::Kind::Assign;
+        s->loc    = loc;
+        s->target = std::move(lv);
+        s->value  = std::move(rhs);
+        return s;
+    }
+    p.expect(TK::Semicolon);
+    auto s = std::make_unique<ExprStmt>();
+    s->kind = Stmt::Kind::ExprStmt;
+    s->loc  = loc;
+    s->expr = std::move(e);
+    return s;
+}
 
-} // namespace Parser
+static TopDeclPtr parse_top_decl(P& p) {
+    auto loc = p.loc();
+
+    // структура
+    if (p.at(TK::Struct)) {
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        p.expect(TK::LBrace);
+        auto sd = std::make_unique<StructDecl>();
+        sd->kind = TopDecl::Kind::Struct;
+        sd->loc  = loc;
+        sd->name = name_tok.lexeme;
+        while (!p.at(TK::RBrace) && !p.at(TK::Eof)) {
+            auto fn_tok = p.expect(TK::Ident);
+            p.expect(TK::Colon);
+            auto ftype = parse_type(p);
+            p.expect(TK::Semicolon);
+            FieldDecl fd;
+            fd.name = fn_tok.lexeme;
+            fd.type = std::move(ftype);
+            fd.loc  = {p.filename, fn_tok.line, fn_tok.col};
+            sd->fields.push_back(std::move(fd));
+        }
+        p.expect(TK::RBrace);
+        return sd;
+    }
+    // псевдоним типа
+    if (p.at(TK::Type)) {
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        p.expect(TK::Assign);
+        auto aliased = parse_type(p);
+        p.expect(TK::Semicolon);
+        auto ta = std::make_unique<TypeAliasDecl>();
+        ta->kind    = TopDecl::Kind::TypeAlias;
+        ta->loc     = loc;
+        ta->name    = name_tok.lexeme;
+        ta->aliased = std::move(aliased);
+        return ta;
+    }
+    // пространство имён
+    if (p.at(TK::Namespace)) {
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        p.expect(TK::LBrace);
+        auto nd = std::make_unique<NamespaceDecl>();
+        nd->kind = TopDecl::Kind::Namespace;
+        nd->loc  = loc;
+        nd->name = name_tok.lexeme;
+        while (!p.at(TK::RBrace) && !p.at(TK::Eof)) {
+            if (p.at(TK::Namespace))
+                throw p.error(p.cur(), "вложенные пространства имён не поддерживаются");
+            nd->members.push_back(parse_top_decl(p));
+        }
+        p.expect(TK::RBrace);
+        return nd;
+    }
+    // глобальная переменная
+    if (p.at(TK::Var) || p.at(TK::Val)) {
+        bool is_val = p.at(TK::Val);
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        TypePtr ann;
+        if (p.at(TK::Colon)) { p.advance(); ann = parse_type(p); }
+        p.expect(TK::Assign);
+        auto init = parse_expr(p);
+        p.expect(TK::Semicolon);
+        auto gv = std::make_unique<GlobalVarDecl>();
+        gv->kind     = TopDecl::Kind::GlobalVar;
+        gv->loc      = loc;
+        gv->name     = name_tok.lexeme;
+        gv->ann_type = std::move(ann);
+        gv->init     = std::move(init);
+        gv->is_val   = is_val;
+        return gv;
+    }
+    // impl TypeName { fun method(...) { ... } }
+    if (p.at(TK::Impl)) {
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        p.expect(TK::LBrace);
+        auto id = std::make_unique<ImplDecl>();
+        id->kind      = TopDecl::Kind::Impl;
+        id->loc       = loc;
+        id->type_name = name_tok.lexeme;
+        while (!p.at(TK::RBrace) && !p.at(TK::Eof)) {
+            auto d = parse_top_decl(p);
+            if (d->kind != TopDecl::Kind::Fun)
+                throw p.error(p.cur(), "only fun declarations allowed inside impl");
+            id->methods.push_back(std::unique_ptr<FunDecl>(
+                static_cast<FunDecl*>(d.release())));
+        }
+        p.expect(TK::RBrace);
+        return id;
+    }
+    // функция
+    if (p.at(TK::Fun)) {
+        p.advance();
+        auto name_tok = p.expect(TK::Ident);
+        p.expect(TK::LParen);
+        std::vector<Param> params;
+        if (!p.at(TK::RParen)) {
+            while (true) {
+                auto pname = p.expect(TK::Ident);
+                p.expect(TK::Colon);
+                auto ptype = parse_type(p);
+                Param param;
+                param.name = pname.lexeme;
+                param.type = std::move(ptype);
+                param.loc  = {p.filename, pname.line, pname.col};
+                params.push_back(std::move(param));
+                if (!p.at(TK::Comma)) break;
+                p.advance();
+            }
+        }
+        p.expect(TK::RParen);
+        p.expect(TK::Colon);
+        auto ret = parse_type(p);
+        auto body = parse_block(p);
+        auto fd = std::make_unique<FunDecl>();
+        fd->kind     = TopDecl::Kind::Fun;
+        fd->loc      = loc;
+        fd->name     = name_tok.lexeme;
+        fd->params   = std::move(params);
+        fd->ret_type = std::move(ret);
+        fd->body     = std::move(body);
+        return fd;
+    }
+    throw p.error(p.cur(), "expected top-level declaration, got '" + p.cur().lexeme + "'");
+}
+
+// ── entry point 
+std::variant<Program, ParseError>
+parse(const std::vector<Lexer::Token>& tokens, const std::string& filename) {
+    P p{tokens, filename};
+    try {
+        Program prog;
+        while (!p.at(TK::Eof))
+            prog.decls.push_back(parse_top_decl(p));
+        return prog;
+    } catch (const ParseError& e) {
+        return e;
+    }
+}
+
+// ── AST печать (для --dump-ast) 
+static void indent(std::ostream& out, int d) {
+    for (int i = 0; i < d; ++i) out << "  ";
+}
+static void dump_type(std::ostream& out, const TypePtr& t) {
+    out << (t ? t->to_string() : "?");
+}
+static void dump_expr(std::ostream& out, const ExprPtr& e, int d);
+static void dump_stmt(std::ostream& out, const StmtPtr& s, int d);
+
+static void dump_expr(std::ostream& out, const ExprPtr& e, int d) {
+    if (!e) { indent(out,d); out << "<null>\n"; return; }
+    indent(out, d);
+    switch (e->kind) {
+    case Expr::Kind::IntLit:
+        out << "IntLit(" << static_cast<IntLitExpr&>(*e).value << ")\n"; break;
+    case Expr::Kind::FloatLit:
+        out << "FloatLit(" << static_cast<FloatLitExpr&>(*e).value << ")\n"; break;
+    case Expr::Kind::BoolLit:
+        out << "BoolLit(" << (static_cast<BoolLitExpr&>(*e).value ? "true" : "false") << ")\n"; break;
+    case Expr::Kind::StringLit:
+        out << "StringLit(\"" << static_cast<StringLitExpr&>(*e).value << "\")\n"; break;
+    case Expr::Kind::Ident:
+        out << "Ident(" << static_cast<IdentExpr&>(*e).name << ")\n"; break;
+    case Expr::Kind::NamespaceAccess: {
+        auto& na = static_cast<NamespaceAccessExpr&>(*e);
+        out << "NS(" << na.ns_name << "::" << na.member << ")\n"; break;
+    }
+    case Expr::Kind::BinOp: {
+        auto& b = static_cast<BinOpExpr&>(*e);
+        out << "BinOp(" << static_cast<int>(b.op) << ")\n";
+        dump_expr(out, b.lhs, d+1); dump_expr(out, b.rhs, d+1); break;
+    }
+    case Expr::Kind::UnaryOp: {
+        auto& u = static_cast<UnaryOpExpr&>(*e);
+        out << "UnaryOp(" << (u.op==UnaryOpKind::Neg?"-":"not") << ")\n";
+        dump_expr(out, u.operand, d+1); break;
+    }
+    case Expr::Kind::Cast: {
+        auto& c = static_cast<CastExpr&>(*e);
+        out << "Cast(as "; dump_type(out, c.target); out << ")\n";
+        dump_expr(out, c.operand, d+1); break;
+    }
+    case Expr::Kind::Call: {
+        auto& c = static_cast<CallExpr&>(*e);
+        out << "Call\n";
+        dump_expr(out, c.callee, d+1);
+        for (auto& a : c.args) dump_expr(out, a, d+1);
+        break;
+    }
+    case Expr::Kind::Index: {
+        auto& i = static_cast<IndexExpr&>(*e);
+        out << "Index\n";
+        dump_expr(out, i.arr, d+1); dump_expr(out, i.idx, d+1); break;
+    }
+    case Expr::Kind::Field: {
+        auto& f = static_cast<FieldExpr&>(*e);
+        out << "Field(." << f.field_name << ")\n";
+        dump_expr(out, f.object, d+1); break;
+    }
+    default: out << "Expr(?)\n"; break;
+    }
+}
+
+static void dump_stmt(std::ostream& out, const StmtPtr& s, int d) {
+    if (!s) return;
+    indent(out, d);
+    switch (s->kind) {
+    case Stmt::Kind::Empty: out << "Empty\n"; break;
+    case Stmt::Kind::VarDecl: {
+        auto& v = static_cast<VarDeclStmt&>(*s);
+        out << (v.is_val?"Val":"Var") << "(" << v.name << ")\n";
+        dump_expr(out, v.init, d+1); break;
+    }
+    case Stmt::Kind::Assign: {
+        auto& a = static_cast<AssignStmt&>(*s);
+        out << "Assign\n";
+        dump_expr(out, a.value, d+1); break;
+    }
+    case Stmt::Kind::ExprStmt: {
+        out << "ExprStmt\n";
+        dump_expr(out, static_cast<ExprStmt&>(*s).expr, d+1); break;
+    }
+    case Stmt::Kind::If: {
+        auto& i = static_cast<IfStmt&>(*s);
+        out << "If\n";
+        dump_expr(out, i.cond, d+1);
+        dump_stmt(out, i.then_branch, d+1);
+        if (i.else_branch) dump_stmt(out, i.else_branch, d+1);
+        break;
+    }
+    case Stmt::Kind::While: {
+        auto& w = static_cast<WhileStmt&>(*s);
+        out << "While\n";
+        dump_expr(out, w.cond, d+1);
+        dump_stmt(out, w.body, d+1); break;
+    }
+    case Stmt::Kind::Block: {
+        out << "Block\n";
+        for (auto& st : static_cast<BlockStmt&>(*s).stmts)
+            dump_stmt(out, st, d+1);
+        break;
+    }
+    case Stmt::Kind::Break:    out << "Break\n";    break;
+    case Stmt::Kind::Continue: out << "Continue\n"; break;
+    case Stmt::Kind::Return: {
+        out << "Return\n";
+        if (static_cast<ReturnStmt&>(*s).value)
+            dump_expr(out, static_cast<ReturnStmt&>(*s).value, d+1);
+        break;
+    }
+    case Stmt::Kind::ForRange: {
+        auto& fr = static_cast<ForRangeStmt&>(*s);
+        out << "ForRange(" << fr.var_name << ")\n";
+        dump_stmt(out, fr.body, d+1);
+        break;
+    }
+    case Stmt::Kind::ForC: {
+        out << "ForC\n";
+        dump_stmt(out, static_cast<ForCStmt&>(*s).body, d+1);
+        break;
+    }
+    }
+}
+
+void dump_ast(const Program& prog, std::ostream& out) {
+    for (auto& d : prog.decls) {
+        switch (d->kind) {
+        case TopDecl::Kind::Fun: {
+            auto& f = static_cast<FunDecl&>(*d);
+            out << "FunDecl " << f.name << "(";
+            for (size_t i=0;i<f.params.size();++i) {
+                if(i) out<<",";
+                out << f.params[i].name << ":" << f.params[i].type->to_string();
+            }
+            out << "): " << f.ret_type->to_string() << "\n";
+            indent(out,1); out << "Block\n";
+            for (auto& st : f.body->stmts) dump_stmt(out, st, 2);
+            break;
+        }
+        case TopDecl::Kind::Struct: {
+            auto& s = static_cast<StructDecl&>(*d);
+            out << "StructDecl " << s.name << "\n";
+            for (auto& f : s.fields)
+                out << "  " << f.name << ": " << f.type->to_string() << "\n";
+            break;
+        }
+        case TopDecl::Kind::TypeAlias: {
+            auto& ta = static_cast<TypeAliasDecl&>(*d);
+            out << "TypeAlias " << ta.name << " = " << ta.aliased->to_string() << "\n";
+            break;
+        }
+        case TopDecl::Kind::Namespace: {
+            auto& ns = static_cast<NamespaceDecl&>(*d);
+            out << "Namespace " << ns.name << "\n";
+            break;
+        }
+        case TopDecl::Kind::GlobalVar: {
+            auto& gv = static_cast<GlobalVarDecl&>(*d);
+            out << (gv.is_val?"Val":"Var") << "Decl " << gv.name << "\n";
+            dump_expr(out, gv.init, 1);
+            break;
+        }
+        case TopDecl::Kind::Impl: {
+            auto& id = static_cast<ImplDecl&>(*d);
+            out << "Impl " << id.type_name << " (" << id.methods.size() << " методов)\n";
+            break;
+        }
+        }
+    }
+}
+
+} 
