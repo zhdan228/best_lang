@@ -896,6 +896,12 @@ static TopDeclPtr parse_top_decl(P& p) {
 }
 
 // ── entry point 
+static void debug_tree(const Program& prog) {
+    std::cerr << "[DBG] decls: " << prog.decls.size() << "\n";
+    for (size_t i=0;i<prog.decls.size();++i)
+        std::cerr << "[DBG]  " << i << " kind=" << (int)prog.decls[i]->kind << "\n";
+}
+
 std::variant<Program, ParseError>
 parse(const std::vector<Lexer::Token>& tokens, const std::string& filename) {
     P p{tokens, filename};
