@@ -218,5 +218,235 @@ struct Analyser {
                 sym = global_scope.lookup(id.name);
             }
             if (!sym) {
+                err(e.loc, "undefined identifier '" + id.name + "'");
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            if (sym->kind == Symbol::Kind::Function) {
+                e.type = sym->type; 
+                return e.type;
+            }
+            e.type = sym->type;
+            return e.type;
+        }
+
+        case Expr::Kind::NullLit:
+            e.type = Type::make_nullable(TYPE_VOID); 
+            return e.type;
+
+        case Expr::Kind::TupleLit: {
+            auto& tl = static_cast<TupleLitExpr&>(e);
+            std::vector<TypePtr> elem_types;
+            for (auto& el : tl.elements)
+                elem_types.push_back(check_expr(*el));
+            e.type = Type::make_tuple(std::move(elem_types));
+            return e.type;
+        }
+
+        case Expr::Kind::TupleIndex: {
+            auto& ti = static_cast<TupleIndexExpr&>(e);
+            auto ot = check_expr(*ti.object);
+            if (!ot || !ot->is_tuple()) {
+                err(e.loc, "tuple index on non-tuple type");
+                e.type = TYPE_INT32; return e.type;
+            }
+            if (ti.index < 0 || ti.index >= static_cast<int>(ot->tuple_elems.size())) {
+                err(e.loc, "tuple index " + std::to_string(ti.index) +
+                    " out of range (size " + std::to_string(ot->tuple_elems.size()) + ")");
+                e.type = TYPE_INT32; return e.type;
+            }
+            e.type = ot->tuple_elems[ti.index];
+            return e.type;
+        }
+
+        case Expr::Kind::NamespaceAccess: {
+            auto& na = static_cast<NamespaceAccessExpr&>(e);
+            auto nit = ns_table.find(na.ns_name);
+            if (nit == ns_table.end()) {
+                err(e.loc, "unknown namespace '" + na.ns_name + "'");
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            auto mit = nit->second.find(na.member);
+            if (mit == nit->second.end()) {
+                err(e.loc, "'" + na.member + "' not found in namespace '" + na.ns_name + "'");
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            e.type = mit->second.type;
+            return e.type;
+        }
+
+        case Expr::Kind::BinOp: {
+            auto& b = static_cast<BinOpExpr&>(e);
+            auto lt = check_expr(*b.lhs);
+            auto rt = check_expr(*b.rhs);
+
+            // Логические операторы: оба операнда должны быть bool
+            if (b.op == BinOpKind::And || b.op == BinOpKind::Or) {
+                if (!lt || !lt->is_bool())
+                    err(b.lhs->loc, "logical operator requires bool, got " + (lt?lt->to_string():"?"));
+                if (!rt || !rt->is_bool())
+                    err(b.rhs->loc, "logical operator requires bool, got " + (rt?rt->to_string():"?"));
+                e.type = TYPE_BOOL;
+                return e.type;
+            }
+            // Операторы сравнения
+            if (b.op==BinOpKind::Eq||b.op==BinOpKind::NEq||
+                b.op==BinOpKind::Lt||b.op==BinOpKind::Le||
+                b.op==BinOpKind::Gt||b.op==BinOpKind::Ge) {
+                bool types_ok = (lt && rt) && (
+                    *lt == *rt ||
+                    (lt->is_nullable() && rt->is_nullable()) ||
+                    can_widen(lt, rt) || can_widen(rt, lt)
+                );
+                if (lt && rt && !types_ok) {
+                    err(e.loc, "type mismatch in comparison: " +
+                        lt->to_string() + " vs " + rt->to_string());
+                } else if (lt && lt->is_numeric() && rt && rt->is_numeric() && *lt != *rt) {
+                    if (can_widen(lt, rt)) maybe_widen(b.lhs, rt);
+                    else if (can_widen(rt, lt)) maybe_widen(b.rhs, lt);
+                }
+                if (lt && lt->is_string() &&
+                    b.op != BinOpKind::Eq && b.op != BinOpKind::NEq)
+                    err(e.loc, "only == and != are defined for string");
+                e.type = TYPE_BOOL;
+                return e.type;
+            }
+            // Арифметика: + для строк = конкатенация
+            if (b.op == BinOpKind::Add && lt && lt->is_string()) {
+                if (!rt || !rt->is_string())
+                    err(e.loc, "string concatenation requires string on both sides");
+                b.op   = BinOpKind::StrConcat;
+                e.type = TYPE_STRING;
+                return e.type;
+            }
+            // Арифметика: с неявным расширением
+            if (lt && rt) {
+                if (*lt != *rt) {
+                    if (can_widen(lt, rt)) {
+                        maybe_widen(b.lhs, rt);
+                        lt = rt;
+                    } else if (can_widen(rt, lt)) {
+                        maybe_widen(b.rhs, lt);
+                        rt = lt;
+                    } else {
+                        err(e.loc, "type mismatch: " + lt->to_string() + " vs " + rt->to_string());
+                    }
+                }
+                if (!lt->is_numeric())
+                    err(e.loc, "arithmetic not defined for type " + lt->to_string());
+            }
+            e.type = lt ? lt : TYPE_INT32;
+            return e.type;
+        }
+
+        case Expr::Kind::UnaryOp: {
+            auto& u = static_cast<UnaryOpExpr&>(e);
+            auto ot = check_expr(*u.operand);
+            if (u.op == UnaryOpKind::Not) {
+                if (!ot || !ot->is_bool())
+                    err(e.loc, "'not' requires bool operand");
+                e.type = TYPE_BOOL;
+            } else { 
+                if (!ot || !ot->is_numeric())
+                    err(e.loc, "unary '-' requires numeric operand");
+                e.type = ot ? ot : TYPE_INT32;
+            }
+            return e.type;
+        }
+
+        case Expr::Kind::Cast: {
+            auto& c = static_cast<CastExpr&>(e);
+            auto ot = check_expr(*c.operand);
+            c.target = resolve(c.target);
+            if (!cast_ok(ot, c.target))
+                err(e.loc, "invalid cast from " + (ot?ot->to_string():"?") +
+                    " to " + c.target->to_string());
+            e.type = c.target;
+            return e.type;
+        }
+
+        case Expr::Kind::Call: {
+            auto& c = static_cast<CallExpr&>(e);
+            std::string fname;
+            Symbol* fsym = nullptr;
+
+            if (c.callee->kind == Expr::Kind::Field) {
+                auto& fe = static_cast<FieldExpr&>(*c.callee);
+                auto obj_type = check_expr(*fe.object);
+                auto obj_rt   = resolve(obj_type);
+                if (obj_rt && obj_rt->is_string()) {
+                    auto& method = fe.field_name;
+                    if (method == "len") {
+                        if (!c.args.empty())
+                            err(e.loc, "str.len() takes no arguments");
+                        e.type = TYPE_UINT64; return e.type;
+                    }
+                    err(e.loc, "unknown method '" + method + "' on string");
+                    e.type = TYPE_INT32; return e.type;
+                }
+                if (obj_rt && obj_rt->is_dynarray()) {
+                    auto& method = fe.field_name;
+                    for (auto& a : c.args) check_expr(*a);
+                    if (method == "push") {
+                        e.type = TYPE_VOID; return e.type;
+                    } else if (method == "pop") {
+                        e.type = obj_rt->elem_type; return e.type;
+                    } else if (method == "len") {
+                        e.type = TYPE_UINT64; return e.type;
+                    } else if (method == "get") {
+                        e.type = obj_rt->elem_type; return e.type;
+                    } else {
+                        err(e.loc, "unknown method '" + method + "' on dynamic array");
+                        e.type = TYPE_INT32; return e.type;
+                    }
+                }
+                if (obj_rt && obj_rt->is_struct()) {
+                    std::string full = obj_rt->struct_name + "::" + fe.field_name;
+                    fsym  = global_scope.lookup(full);
+                    fname = full;
+                }
+                if (!fsym) {
+                    err(e.loc, "unknown method '" + fe.field_name + "' on type " +
+                        (obj_rt ? obj_rt->to_string() : "?"));
+                    for (auto& a : c.args) check_expr(*a);
+                    e.type = TYPE_INT32; return e.type;
+                }
+                // проверяем аргументы с self как первым
+                // число аргументов = параметры - 1 (self неявный)
+                if (c.args.size() + 1 != fsym->param_types.size()) {
+                    err(e.loc, "method '" + fe.field_name + "' expects " +
+                        std::to_string(fsym->param_types.size()-1) + " arguments, got " +
+                        std::to_string(c.args.size()));
+                }
+                for (size_t i = 0; i < c.args.size(); ++i) {
+                    auto at = check_expr(*c.args[i]);
+                    size_t pi = i + 1; // пропускаем self
+                    if (pi < fsym->param_types.size() && at && fsym->param_types[pi]) {
+                        auto rp = resolve(fsym->param_types[pi]);
+                        auto ra = resolve(at);
+                        bool arr_compat = rp->is_dynarray() &&
+                            (ra->is_array()||ra->is_dynarray()) &&
+                            *rp->elem_type == *ra->elem_type;
+                        if (*ra != *rp && !arr_compat) maybe_widen(c.args[i], rp);
+                    }
+                }
+                e.type = fsym->type;
+                return e.type;
+            }
+
+            // Обычный вызов: name(args) или ns::name(args) ────────────
+            if (c.callee->kind == Expr::Kind::Ident) {
+                fname = static_cast<IdentExpr&>(*c.callee).name;
+                // Сначала проверяем перегрузки
+                auto* ovl = global_scope.lookup_overloads(fname);
+                if (ovl && !ovl->empty()) {
+                    std::vector<TypePtr> arg_types;
+                    for (auto& a : c.args) arg_types.push_back(check_expr(*a));
+                    for (auto& sym : *ovl) {
+                        if (sym.param_types.size() != arg_types.size()) continue;
+                        bool match = true;
+                        for (size_t i = 0; i < arg_types.size(); ++i) {
 
 } // namespace Semantic
