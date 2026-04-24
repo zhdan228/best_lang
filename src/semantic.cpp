@@ -448,5 +448,235 @@ struct Analyser {
                         if (sym.param_types.size() != arg_types.size()) continue;
                         bool match = true;
                         for (size_t i = 0; i < arg_types.size(); ++i) {
+                            auto rp = resolve(sym.param_types[i]);
+                            auto ra = resolve(arg_types[i]);
+                            if (ra && rp && *ra != *rp && !can_widen(ra, rp))
+                                { match = false; break; }
+                        }
+                        if (match) {
+                            static_cast<IdentExpr&>(*c.callee).name =
+                                mangle(fname, sym.param_types);
+                            e.type = sym.type;
+                            return e.type;
+                        }
+                    }
+                    err(e.loc, "no matching overload of '" + fname + "' for given arguments");
+                    e.type = TYPE_INT32; return e.type;
+                }
+                fsym = global_scope.lookup(fname);
+                if (!fsym) fsym = cur_scope().lookup(fname);
+            } else if (c.callee->kind == Expr::Kind::NamespaceAccess) {
+                auto& na = static_cast<NamespaceAccessExpr&>(*c.callee);
+                auto nit = ns_table.find(na.ns_name);
+                if (nit != ns_table.end()) {
+                    auto mit = nit->second.find(na.member);
+                    if (mit != nit->second.end()) fsym = &mit->second;
+                }
+                fname = na.ns_name + "::" + na.member;
+            }
+            if (!fsym || fsym->kind != Symbol::Kind::Function) {
+                err(e.loc, "'" + fname + "' is not a function");
+                for (auto& a : c.args) check_expr(*a);
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            if (!fsym->is_builtin && c.args.size() != fsym->param_types.size()) {
+                err(e.loc, "function '" + fname + "' expects " +
+                    std::to_string(fsym->param_types.size()) + " arguments, got " +
+                    std::to_string(c.args.size()));
+            }
+            // Проверяем число аргументов для конкретных встроенных
+            if (fsym->is_builtin) {
+                if (fname == "print") {
+                    if (c.args.size() != 1)
+                        err(e.loc, "print() expects 1 positional argument");
+                    // Проверяем именованный аргумент end: только string
+                    for (auto& na : c.named_args) {
+                        if (na.name == "end") {
+                            auto et = check_expr(*na.value);
+                            if (!et || !et->is_string())
+                                err(na.value->loc, "print() end= must be string");
+                        } else {
+                            err(e.loc, "print() unknown named argument '" + na.name + "'");
+                        }
+                    }
+                }
+                if (fname == "input" || fname == "input_int" || fname == "input_float") {
+                    // 0 или 1 аргумент (необязательная строка-подсказка, как в Python)
+                    if (c.args.size() > 1)
+                        err(e.loc, fname + "() expects 0 or 1 argument (prompt string)");
+                    if (c.args.size() == 1) {
+                        auto pt = check_expr(*c.args[0]);
+                        if (!pt || !pt->is_string())
+                            err(c.args[0]->loc, fname + "() prompt must be string");
+                    }
+                }
+                if ((fname == "to_int" || fname == "to_float") && c.args.size() != 1)
+                    err(e.loc, fname + "() expects 1 argument");
+                if (fname == "exit" && c.args.size() != 1)
+                    err(e.loc, "exit() expects 1 argument");
+                if (fname == "panic" && c.args.size() != 1)
+                    err(e.loc, "panic() expects 1 argument");
+            }
+            for (size_t i = 0; i < c.args.size(); ++i) {
+                auto at = check_expr(*c.args[i]);
+                // Пропускаем строгую проверку типов для встроенных
+                if (fsym->is_builtin) continue;
+                if (i < fsym->param_types.size() && at && fsym->param_types[i]) {
+                    auto resolved_param = resolve(fsym->param_types[i]);
+                    auto resolved_arg   = resolve(at);
+                    bool arr_compat = resolved_param->is_dynarray() &&
+                        (resolved_arg->is_array()||resolved_arg->is_dynarray()) &&
+                        *resolved_param->elem_type == *resolved_arg->elem_type;
+                    bool null_compat = resolved_param->is_nullable() &&
+                        (resolved_arg->is_nullable() ||
+                         (resolved_param->elem_type && *resolved_param->elem_type == *resolved_arg));
+                    if (*resolved_arg != *resolved_param && !arr_compat && !null_compat)
+                        err(c.args[i]->loc, "argument " + std::to_string(i+1) +
+                            " type mismatch: expected " + resolved_param->to_string() +
+                            ", got " + resolved_arg->to_string());
+                }
+            }
+            e.type = fsym->type; 
+            return e.type;
+        }
+
+        case Expr::Kind::Index: {
+            auto& ix = static_cast<IndexExpr&>(e);
+            auto arrt = check_expr(*ix.arr);
+            auto idxt = check_expr(*ix.idx);
+            auto arrt_r = resolve(arrt);
+            if (!arrt_r || (!arrt_r->is_array() && !arrt_r->is_dynarray()))
+                err(e.loc, "indexing non-array type");
+            if (!idxt || !idxt->is_int())
+                err(ix.idx->loc, "array index must be integer");
+            e.type = (arrt_r && (arrt_r->is_array()||arrt_r->is_dynarray()))
+                     ? arrt_r->elem_type : TYPE_INT32;
+            return e.type;
+        }
+
+        case Expr::Kind::Field: {
+            auto& fe = static_cast<FieldExpr&>(e);
+            auto ot = check_expr(*fe.object);
+            if (!ot || !ot->is_struct()) {
+                err(e.loc, "field access on non-struct type");
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            auto sit = struct_table.find(ot->struct_name);
+            if (sit == struct_table.end()) {
+                err(e.loc, "unknown struct type '" + ot->struct_name + "'");
+                e.type = TYPE_INT32;
+                return e.type;
+            }
+            auto& fields = sit->second.fields;
+            for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
+                if (fields[i].name == fe.field_name) {
+                    fe.field_idx = i;
+                    e.type = fields[i].type;
+                    return e.type;
+                }
+            }
+            err(e.loc, "struct '" + ot->struct_name + "' has no field '" + fe.field_name + "'");
+            e.type = TYPE_INT32;
+            return e.type;
+        }
+
+        case Expr::Kind::ArrayLit: {
+            auto& al = static_cast<ArrayLitExpr&>(e);
+            TypePtr elem;
+            for (auto& el : al.elements) {
+                auto t = check_expr(*el);
+                if (!elem) elem = t;
+                else if (t && *t != *elem)
+                    err(el->loc, "array literal element type mismatch");
+            }
+            if (!elem) elem = TYPE_INT32; 
+            e.type = Type::make_array(elem, (int64_t)al.elements.size());
+            return e.type;
+        }
+
+        case Expr::Kind::StructLit: {
+            auto& sl = static_cast<StructLitExpr&>(e);
+            auto sit = struct_table.find(sl.type_name);
+            if (sit == struct_table.end()) {
+                err(e.loc, "unknown struct '" + sl.type_name + "'");
+                for (auto& f : sl.fields) check_expr(*f.value);
+                e.type = Type::make_struct(sl.type_name);
+                return e.type;
+            }
+            auto& decl_fields = sit->second.fields;
+            // проверяем каждое поле
+            for (auto& sf : sl.fields) {
+                auto vt = check_expr(*sf.value);
+                bool found = false;
+                for (auto& df : decl_fields) {
+                    if (df.name == sf.name) {
+                        found = true;
+                        if (vt && *vt != *df.type) {
+                            bool arr_compat = df.type->is_dynarray() &&
+                                (vt->is_array()||vt->is_dynarray()) &&
+                                *df.type->elem_type == *vt->elem_type;
+                            bool null_compat = df.type->is_nullable() &&
+                                (vt->is_nullable() ||
+                                 (df.type->elem_type && *df.type->elem_type == *vt));
+                            if (!arr_compat && !null_compat)
+                                err(sf.value->loc,
+                                    "field '" + sf.name + "' expects " + df.type->to_string() +
+                                    ", got " + vt->to_string());
+                        }
+                        break;
+                    }
+                }
+                if (!found)
+                    err(e.loc, "struct '" + sl.type_name + "' has no field '" + sf.name + "'");
+            }
+            // все поля должны быть заполнены
+            for (auto& df : decl_fields) {
+                bool found = false;
+                for (auto& sf : sl.fields) if (sf.name == df.name) { found = true; break; }
+                if (!found)
+                    err(e.loc, "missing field '" + df.name + "' in struct literal");
+            }
+            e.type = Type::make_struct(sl.type_name);
+            return e.type;
+        }
+
+        default:
+            e.type = TYPE_INT32;
+            return e.type;
+        }
+    }
+
+    // Проверяет lvalue и возвращает его тип ─────────────────────────────────
+    TypePtr check_lvalue(LValue& lv, bool allow_mut) {
+        switch (lv.kind) {
+        case LValue::Kind::Ident: {
+            Symbol* sym = cur_scope().lookup(lv.name);
+            if (!sym) sym = global_scope.lookup(lv.name);
+            if (!sym) {
+                err(lv.loc, "undefined identifier '" + lv.name + "'");
+                return TYPE_INT32;
+            }
+            // val запрещает только переприсваивание самой переменной.
+            // Изменение полей/элементов разрешено.
+            if (allow_mut && sym->is_val && lv.kind == LValue::Kind::Ident)
+                err(lv.loc, "cannot assign to immutable binding '" + lv.name + "'");
+            return sym->type;
+        }
+        case LValue::Kind::Index: {
+            auto arrt = check_lvalue(*lv.base, false); // разрешаем индексирование val-массивов
+            auto idxt = check_expr(*lv.idx);
+            if (!arrt || !arrt->is_array())
+                err(lv.loc, "indexing non-array");
+            if (!idxt || !idxt->is_int())
+                err(lv.idx->loc, "array index must be integer");
+            return (arrt && arrt->is_array()) ? arrt->elem_type : TYPE_INT32;
+        }
+        case LValue::Kind::Field: {
+            auto ot = check_lvalue(*lv.base, false); // разрешаем изменение полей val-структур
+            if (!ot || !ot->is_struct()) {
+                err(lv.loc, "field access on non-struct");
+                return TYPE_INT32;
 
 } // namespace Semantic
