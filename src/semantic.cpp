@@ -898,5 +898,195 @@ struct Analyser {
                 for (auto& m : ns.members) {
                     if (m->kind == TopDecl::Kind::GlobalVar) {
                         auto& gv = static_cast<GlobalVarDecl&>(*m);
+                        std::string short_name = gv.name;
+                        gv.name = ns.name + "::" + short_name; 
+                        Symbol sym;
+                        sym.kind   = Symbol::Kind::GlobalVar;
+                        sym.type   = gv.ann_type; 
+                        sym.is_val = gv.is_val;
+                        sym.slot   = next_global++;
+                        ns_table[ns.name][short_name] = sym; 
+                        globals_out.push_back(&gv);
+                    } else if (m->kind == TopDecl::Kind::Fun) {
+                        auto& fd = static_cast<FunDecl&>(*m);
+                        Symbol sym;
+                        sym.kind = Symbol::Kind::Function;
+                        sym.type = fd.ret_type;
+                        for (auto& p : fd.params)
+                            sym.param_types.push_back(p.type);
+                        ns_table[ns.name][fd.name] = sym;
+                        functions_out.push_back(&fd);
+                    }
+                }
+                break;
+            }
+            case TopDecl::Kind::GlobalVar: {
+                auto& gv = static_cast<GlobalVarDecl&>(*td);
+                Symbol sym;
+                sym.kind   = Symbol::Kind::GlobalVar;
+                sym.type   = gv.ann_type;
+                sym.is_val = gv.is_val;
+                sym.slot   = next_global++;
+                global_scope.syms[gv.name] = sym;
+                globals_out.push_back(&gv);
+                break;
+            }
+            case TopDecl::Kind::Fun: {
+                auto& fd = static_cast<FunDecl&>(*td);
+                Symbol sym;
+                sym.kind = Symbol::Kind::Function;
+                sym.type = fd.ret_type;
+                for (auto& p : fd.params)
+                    sym.param_types.push_back(p.type);
+                std::string base_name = fd.name;
+                std::string mangled   = mangle(base_name, sym.param_types);
+                sym.slot = static_cast<int>(functions_out.size()); 
 
-} // namespace Semantic
+                if (global_scope.syms.count(base_name)) {
+                    auto existing = global_scope.syms[base_name];
+                    global_scope.syms.erase(base_name);
+                    global_scope.overloads[base_name].push_back(existing);
+                    global_scope.overloads[base_name].push_back(sym);
+                    // Переименовываем первую функцию в мангленную форму
+                    // Находим в списке и переименовываем
+                    for (auto* f : functions_out) {
+                        if (f->name == base_name) {
+                            f->name = mangle(base_name, existing.param_types);
+                            break;
+                        }
+                    }
+                    fd.name = mangled;
+                } else if (global_scope.overloads.count(base_name)) {
+                    global_scope.overloads[base_name].push_back(sym);
+                    fd.name = mangled; // переименовываем в мангленную форму
+                } else {
+                    global_scope.syms[base_name] = sym;
+                }
+                functions_out.push_back(&fd);
+                break;
+            }
+            case TopDecl::Kind::Impl: {
+                auto& id = static_cast<ImplDecl&>(*td);
+                for (auto& mp : id.methods) {
+                    auto& m = *mp;
+                    std::string qualified = id.type_name + "::" + m.name;
+                    m.name = qualified; // переименовываем для codegen
+                    Symbol sym;
+                    sym.kind = Symbol::Kind::Function;
+                    sym.type = m.ret_type;
+                    for (auto& p : m.params)
+                        sym.param_types.push_back(p.type);
+                    global_scope.syms[qualified] = sym;
+                    functions_out.push_back(mp.get());
+                }
+                break;
+            }
+            default: break;
+            }
+        }
+    }
+
+    // Анализ тела функции 
+    void analyse_fun(FunDecl& fd) {
+        // Настраиваем состояние для функции
+        current_ret_type = resolve(fd.ret_type);
+        in_loop = false;
+        next_slot = 0;
+
+        push_scope();
+        // Параметры — иммутабельные локальные переменные
+        for (auto& p : fd.params) {
+            auto pt = resolve(p.type);
+            int slot = alloc_slot();
+            cur_scope().syms[p.name] = Symbol{Symbol::Kind::Param, pt, true, false, slot};
+        }
+        // Проверяем тело функции
+        for (auto& st : fd.body->stmts)
+            check_stmt(*st);
+
+        // non-void функции должны всегда возвращать значение
+        if (!current_ret_type->is_void() && !always_returns(*fd.body))
+            err(fd.loc, "function '" + fd.name + "' does not return on all paths");
+
+        // Сохраняем число слотов (reuse for codegen)
+        fd.body->loc.col = (uint32_t)next_slot; 
+
+        pop_scope();
+    }
+
+    // Анализ инициализатора глобальной переменной 
+    void analyse_global(GlobalVarDecl& gv) {
+        auto it = check_expr(*gv.init);
+        if (gv.ann_type) {
+            gv.ann_type = resolve(gv.ann_type);
+            if (it && *it != *gv.ann_type)
+                err(gv.loc, "global '" + gv.name + "': type mismatch");
+        } else {
+            gv.ann_type = it;
+        }
+        auto sym_it = global_scope.syms.find(gv.name);
+        if (sym_it != global_scope.syms.end())
+            sym_it->second.type = gv.ann_type;
+    }
+
+    // Главная точка входа анализатора 
+    AnalysisResult run(Program& prog) {
+        // Проход 1: сбор всех объявлений
+        collect_top(prog.decls);
+
+        // Проверяем наличие функции main
+        {
+            auto* main_sym = global_scope.lookup("main");
+            if (!main_sym || main_sym->kind != Symbol::Kind::Function)
+                errors.push_back({filename, 0, 0, "program must have a 'main' function"});
+        }
+
+        // Проход 2: анализ инициализаторов глобальных переменных
+        push_scope(); 
+        for (auto* gv : globals_out)
+            analyse_global(*gv);
+        pop_scope();
+
+        // Проход 3: анализ тел функций
+        for (auto* fd : functions_out) {
+            // Встроенные функции доступны везде
+            analyse_fun(*fd);
+        }
+
+        AnalysisResult res;
+        res.errors    = std::move(errors);
+        res.globals   = std::move(globals_out);
+        res.functions = std::move(functions_out);
+        return res;
+    }
+};
+
+static void register_builtins(Scope& gs) {
+    auto reg_builtin = [&](const std::string& name,
+                           std::vector<TypePtr> params,
+                           TypePtr ret) {
+        Symbol s;
+        s.kind        = Symbol::Kind::Function;
+        s.type        = ret;
+        s.param_types = std::move(params);
+        s.is_builtin  = true;
+        gs.syms[name] = s;
+    };
+
+    reg_builtin("print",       {TYPE_INT32},  TYPE_VOID);   // overloaded
+    reg_builtin("input",       {},            TYPE_STRING);
+    reg_builtin("input_int",   {},            TYPE_INT32);  // читает строку → int32
+    reg_builtin("input_float", {},            TYPE_FLOAT64);// читает строку → float64
+    reg_builtin("to_int",      {TYPE_STRING}, TYPE_INT32);  // "42" → 42
+    reg_builtin("to_float",    {TYPE_STRING}, TYPE_FLOAT64);// "3.14" → 3.14
+    reg_builtin("exit",        {TYPE_INT32},  TYPE_VOID);
+    reg_builtin("panic",       {TYPE_STRING}, TYPE_VOID);
+}
+
+AnalysisResult analyze(Program& prog, const std::string& filename) {
+    Analyser a{filename};
+    register_builtins(a.global_scope);
+    return a.run(prog);
+}
+
+} 
