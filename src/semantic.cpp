@@ -678,5 +678,225 @@ struct Analyser {
             if (!ot || !ot->is_struct()) {
                 err(lv.loc, "field access on non-struct");
                 return TYPE_INT32;
+            }
+            auto sit = struct_table.find(ot->struct_name);
+            if (sit == struct_table.end()) {
+                err(lv.loc, "unknown struct '" + ot->struct_name + "'");
+                return TYPE_INT32;
+            }
+            for (int i = 0; i < static_cast<int>(sit->second.fields.size()); ++i) {
+                if (sit->second.fields[i].name == lv.field) {
+                    lv.field_idx = i;
+                    return sit->second.fields[i].type;
+                }
+            }
+            err(lv.loc, "struct has no field '" + lv.field + "'");
+            return TYPE_INT32;
+        }
+        }
+        return TYPE_INT32;
+    }
+
+    // Проверка: все ветки возвращают значение 
+    // Возвращает true если инструкция всегда возвращает значение
+    bool always_returns(const Stmt& s) {
+        switch (s.kind) {
+        case Stmt::Kind::Return: return true;
+        case Stmt::Kind::Block: {
+            for (auto& st : static_cast<const BlockStmt&>(s).stmts)
+                if (always_returns(*st)) return true;
+            return false;
+        }
+        case Stmt::Kind::If: {
+            auto& i = static_cast<const IfStmt&>(s);
+            return i.else_branch &&
+                   always_returns(*i.then_branch) &&
+                   always_returns(*i.else_branch);
+        }
+        case Stmt::Kind::While:
+            return false; 
+        default:
+            return false;
+        }
+    }
+
+    // Проверка инструкций ─────────────────────────────────────────────────
+    void check_stmt(Stmt& s) {
+        switch (s.kind) {
+        case Stmt::Kind::Empty: break;
+
+        case Stmt::Kind::VarDecl: {
+            auto& v = static_cast<VarDeclStmt&>(s);
+            auto init_type = check_expr(*v.init);
+            TypePtr declared;
+            if (v.ann_type) {
+                declared = resolve(v.ann_type);
+                // [] или [...] можно присвоить в [T]
+                bool dyn_compat = declared->is_dynarray() && init_type &&
+                                  (init_type->is_array() || init_type->is_dynarray()) &&
+                                  *declared->elem_type == *init_type->elem_type;
+                // T или null можно присвоить в T?
+                bool null_compat = declared->is_nullable() && init_type &&
+                    (init_type->is_nullable() ||   // null (Nullable<Void>)
+                     *declared->elem_type == *init_type); 
+                // Неявное расширение числовых типов
+                bool widen_ok = init_type && can_widen(init_type, declared);
+                if (init_type && *init_type != *declared &&
+                    !dyn_compat && !null_compat && !widen_ok) {
+                    err(v.loc, "variable '" + v.name + "': type annotation " +
+                        declared->to_string() + " doesn't match initializer " +
+                        init_type->to_string());
+                }
+                if (widen_ok) maybe_widen(v.init, declared);
+            } else {
+                declared = init_type;
+            }
+            declare_local(v.name, declared, v.is_val, v.loc);
+            break;
+        }
+
+        case Stmt::Kind::Assign: {
+            auto& a = static_cast<AssignStmt&>(s);
+            auto ltype = check_lvalue(*a.target, true);
+            auto rtype = check_expr(*a.value);
+            if (ltype && rtype && *ltype != *rtype) {
+                // T или null → T?
+                bool null_ok = ltype->is_nullable() &&
+                    (rtype->is_nullable() || // присваиваем null
+                     (ltype->elem_type && *ltype->elem_type == *rtype)); // T → T?
+                bool widen_ok = can_widen(rtype, ltype);
+                if (!null_ok && !widen_ok)
+                    err(s.loc, "assignment type mismatch: " +
+                        ltype->to_string() + " vs " + rtype->to_string());
+                if (widen_ok) maybe_widen(a.value, ltype);
+            }
+            break;
+        }
+
+        case Stmt::Kind::ExprStmt: {
+            check_expr(*static_cast<ExprStmt&>(s).expr);
+            break;
+        }
+
+        case Stmt::Kind::If: {
+            auto& i = static_cast<IfStmt&>(s);
+            auto ct = check_expr(*i.cond);
+            if (!ct || !ct->is_bool())
+                err(i.cond->loc, "if condition must be bool, got " + (ct?ct->to_string():"?"));
+            check_stmt(*i.then_branch);
+            if (i.else_branch) check_stmt(*i.else_branch);
+            break;
+        }
+
+        case Stmt::Kind::While: {
+            auto& w = static_cast<WhileStmt&>(s);
+            auto ct = check_expr(*w.cond);
+            if (!ct || !ct->is_bool())
+                err(w.cond->loc, "while condition must be bool, got " + (ct?ct->to_string():"?"));
+            bool prev = in_loop;
+            in_loop = true;
+            check_stmt(*w.body);
+            in_loop = prev;
+            break;
+        }
+
+        case Stmt::Kind::Block: {
+            push_scope();
+            for (auto& st : static_cast<BlockStmt&>(s).stmts)
+                check_stmt(*st);
+            pop_scope();
+            break;
+        }
+
+        case Stmt::Kind::ForRange: {
+            auto& fr = static_cast<ForRangeStmt&>(s);
+            auto st = check_expr(*fr.start);
+            auto en = check_expr(*fr.end);
+            TypePtr var_t = fr.var_type ? resolve(fr.var_type) : (st ? st : TYPE_INT32);
+            push_scope();
+            int slot = alloc_slot();
+            cur_scope().syms[fr.var_name] = Symbol{Symbol::Kind::LocalVar, var_t, false, false, slot};
+            bool prev = in_loop; in_loop = true;
+            check_stmt(*fr.body);
+            in_loop = prev;
+            pop_scope();
+            break;
+        }
+
+        case Stmt::Kind::ForC: {
+            auto& fc = static_cast<ForCStmt&>(s);
+            push_scope();
+            check_stmt(*fc.init);
+            auto ct = check_expr(*fc.cond);
+            if (!ct || !ct->is_bool())
+                err(fc.cond->loc, "for condition must be bool");
+            bool prev = in_loop; in_loop = true;
+            check_stmt(*fc.body);
+            check_stmt(*fc.step);
+            in_loop = prev;
+            pop_scope();
+            break;
+        }
+
+        case Stmt::Kind::Break:
+        case Stmt::Kind::Continue:
+            if (!in_loop)
+                err(s.loc, (s.kind==Stmt::Kind::Break?"break":"continue") +
+                    std::string(" outside of loop"));
+            break;
+
+        case Stmt::Kind::Return: {
+            auto& r = static_cast<ReturnStmt&>(s);
+            if (current_ret_type && current_ret_type->is_void()) {
+                if (r.value)
+                    err(s.loc, "void function cannot return a value");
+            } else {
+                if (!r.value) {
+                    err(s.loc, "non-void function must return a value");
+                } else {
+                    auto vt = check_expr(*r.value);
+                    if (current_ret_type && vt && *vt != *current_ret_type) {
+                        // T → T? при возврате из nullable функции
+                        bool ret_nullable = current_ret_type->is_nullable() &&
+                            (vt->is_nullable() || // null
+                             (current_ret_type->elem_type &&
+                              *current_ret_type->elem_type == *vt));
+                        // Неявное расширение
+                        bool widen_ok = can_widen(vt, current_ret_type);
+                        if (!ret_nullable && !widen_ok)
+                            err(s.loc, "return type mismatch: expected " +
+                                current_ret_type->to_string() + ", got " + vt->to_string());
+                    }
+                }
+            }
+            break;
+        }
+        }
+    }
+
+    // Первый проход: сбор объявлений верхнего уровня 
+    void collect_top(const std::vector<TopDeclPtr>& decls,
+                     const std::string& = "") {
+        for (auto& td : decls) {
+            switch (td->kind) {
+            case TopDecl::Kind::Struct: {
+                auto& sd = static_cast<StructDecl&>(*td);
+                Symbol sym;
+                sym.kind   = Symbol::Kind::StructType;
+                sym.type   = Type::make_struct(sd.name);
+                sym.fields = sd.fields;
+                struct_table[sd.name] = sym;
+                break;
+            }
+            case TopDecl::Kind::TypeAlias: {
+                auto& ta = static_cast<TypeAliasDecl&>(*td);
+                type_aliases[ta.name] = ta.aliased;
+                break;
+            }
+            case TopDecl::Kind::Namespace: {
+                auto& ns = static_cast<NamespaceDecl&>(*td);
+                for (auto& m : ns.members) {
+                    if (m->kind == TopDecl::Kind::GlobalVar) {
+                        auto& gv = static_cast<GlobalVarDecl&>(*m);
 
 } // namespace Semantic
