@@ -498,5 +498,354 @@ static void lower_stmt(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
         auto val = lower_expr(*a.value, ctx, prog);
         lower_assign(*a.target, val, ctx, prog);
         break;
+    }
 
-} // namespace IR
+    case Stmt::Kind::ExprStmt: {
+        lower_expr(*static_cast<const ExprStmt&>(s).expr, ctx, prog);
+        break;
+    }
+
+    case Stmt::Kind::If: {
+        auto& i = static_cast<const IfStmt&>(s);
+        auto cond = lower_expr(*i.cond, ctx, prog);
+        std::string else_label = ctx.new_label("else");
+        std::string end_label  = ctx.new_label("endif");
+        ctx.emit(JumpFalse{cond, else_label});
+        lower_stmt(*i.then_branch, ctx, prog);
+        if (i.else_branch) ctx.emit(Jump{end_label});
+        ctx.emit(Label{else_label});
+        if (i.else_branch) {
+            lower_stmt(*i.else_branch, ctx, prog);
+            ctx.emit(Label{end_label});
+        }
+        break;
+    }
+
+    case Stmt::Kind::While: {
+        auto& w = static_cast<const WhileStmt&>(s);
+        std::string start  = ctx.new_label("while_start");
+        std::string end_lb = ctx.new_label("while_end");
+        ctx.emit(Label{start});
+        auto cond = lower_expr(*w.cond, ctx, prog);
+        ctx.emit(JumpFalse{cond, end_lb});
+        ctx.loops.push_back({start, end_lb});
+        lower_stmt(*w.body, ctx, prog);
+        ctx.loops.pop_back();
+        ctx.emit(Jump{start});
+        ctx.emit(Label{end_lb});
+        break;
+    }
+
+    case Stmt::Kind::ForRange: {
+        auto& fr = static_cast<const ForRangeStmt&>(s);
+        auto start_val = lower_expr(*fr.start, ctx, prog);
+        int slot = ctx.fn.num_locals++;
+        ctx.locals[fr.var_name] = slot;
+        ctx.fn.slot_names.resize(ctx.fn.num_locals, "");
+        ctx.fn.slot_names[slot] = fr.var_name;
+        ctx.emit(Copy{LocalVar{slot, fr.var_name}, start_val});
+
+        std::string lstart = ctx.new_label("for_start");
+        std::string lend   = ctx.new_label("for_end");
+        ctx.emit(Label{lstart});
+        // условие: i < end
+        auto i_op   = LocalVar{slot, fr.var_name};
+        auto end_op = lower_expr(*fr.end, ctx, prog);
+        auto cond   = ctx.new_temp();
+        ctx.emit(IBinInstr{cond, IBinOp::ILt, i_op, end_op});
+        ctx.emit(JumpFalse{cond, lend});
+        ctx.loops.push_back({lstart, lend});
+        lower_stmt(*fr.body, ctx, prog);
+        ctx.loops.pop_back();
+        // шаг: i = i + 1
+        auto one  = ConstInt{1};
+        auto next = ctx.new_temp();
+        ctx.emit(IBinInstr{next, IBinOp::Add, i_op, one});
+        ctx.emit(Copy{i_op, next});
+        ctx.emit(Jump{lstart});
+        ctx.emit(Label{lend});
+        break;
+    }
+
+    case Stmt::Kind::ForC: {
+        // for init; cond; step { тело }
+        auto& fc = static_cast<const ForCStmt&>(s);
+        lower_stmt(*fc.init, ctx, prog);
+        std::string lstart = ctx.new_label("forc_start");
+        std::string lend   = ctx.new_label("forc_end");
+        ctx.emit(Label{lstart});
+        auto cond_op = lower_expr(*fc.cond, ctx, prog);
+        ctx.emit(JumpFalse{cond_op, lend});
+        ctx.loops.push_back({lstart, lend});
+        lower_stmt(*fc.body, ctx, prog);
+        ctx.loops.pop_back();
+        lower_stmt(*fc.step, ctx, prog);
+        ctx.emit(Jump{lstart});
+        ctx.emit(Label{lend});
+        break;
+    }
+
+    case Stmt::Kind::Block: {
+        for (auto& st : static_cast<const BlockStmt&>(s).stmts)
+            lower_stmt(*st, ctx, prog);
+        break;
+    }
+
+    case Stmt::Kind::Break:
+        if (!ctx.loops.empty())
+            ctx.emit(Jump{ctx.loops.back().break_label});
+        break;
+
+    case Stmt::Kind::Continue:
+        if (!ctx.loops.empty())
+            ctx.emit(Jump{ctx.loops.back().cont_label});
+        break;
+
+    case Stmt::Kind::Return: {
+        auto& r = static_cast<const ReturnStmt&>(s);
+        if (r.value) {
+            auto val = lower_expr(*r.value, ctx, prog);
+            ctx.emit(ReturnVal{val});
+        } else {
+            ctx.emit(Return{});
+        }
+        break;
+    }
+    }
+}
+
+static IRFunction lower_function(FunDecl& fd, IRProgram& prog) {
+    IRFunction fn;
+    fn.name       = fd.name;
+    fn.num_params = static_cast<int>(fd.params.size());
+    fn.num_locals = static_cast<int>(fd.params.size()); 
+    fn.ret_type   = fd.ret_type;
+
+    int next_temp = 0;
+    FnCtx ctx{fn, next_temp};
+
+    // Регистрируем слоты параметров
+    for (int i = 0; i < static_cast<int>(fd.params.size()); ++i) {
+        ctx.locals[fd.params[i].name] = i;
+        fn.slot_names.push_back(fd.params[i].name);
+    }
+
+    // Понижаем тело функции
+    for (auto& st : fd.body->stmts)
+        lower_stmt(*st, ctx, prog);
+
+    // void-функции должны заканчиваться Return
+    if (fn.body.empty() || !std::holds_alternative<ReturnVal>(fn.body.back()) &&
+                           !std::holds_alternative<Return>(fn.body.back()))
+        fn.body.push_back(Return{});
+
+    return fn;
+}
+
+IRProgram lower(Program& prog,
+                const Semantic::AnalysisResult& sem,
+                const std::string& /*filename*/) {
+    IRProgram irp;
+
+    // Регистрируем глобальные переменные
+    for (auto* gv : sem.globals) {
+        irp.global_names.push_back(gv->name);
+        irp.global_types.push_back(gv->ann_type);
+        irp.global_inits.push_back(ConstUnit{});
+    }
+
+    // Понижаем каждую функцию
+    for (auto* fd : sem.functions) {
+        IRFunction irf = lower_function(*fd, irp);
+        if (fd->name == "main") irp.main_idx = static_cast<int>(irp.functions.size());
+        irp.functions.push_back(std::move(irf));
+    }
+
+    // Простой константный инициализатор?
+    auto is_const_init = [](const Expr& e) {
+        return e.kind == Expr::Kind::IntLit   ||
+               e.kind == Expr::Kind::FloatLit ||
+               e.kind == Expr::Kind::BoolLit  ||
+               e.kind == Expr::Kind::StringLit;
+    };
+
+    // Константные инициализаторы → пул констант
+    for (int i = 0; i < static_cast<int>(sem.globals.size()); ++i) {
+        auto& gv = *sem.globals[i];
+        if (gv.init->kind == Expr::Kind::IntLit)
+            irp.global_inits[i] = ConstInt{static_cast<IntLitExpr&>(*gv.init).value};
+        else if (gv.init->kind == Expr::Kind::FloatLit)
+            irp.global_inits[i] = ConstFloat{static_cast<FloatLitExpr&>(*gv.init).value};
+        else if (gv.init->kind == Expr::Kind::BoolLit)
+            irp.global_inits[i] = ConstBool{static_cast<BoolLitExpr&>(*gv.init).value};
+        else if (gv.init->kind == Expr::Kind::StringLit)
+            irp.global_inits[i] = ConstString{static_cast<StringLitExpr&>(*gv.init).value};
+    }
+
+    // Нетривиальные инициализаторы (вызовы функций):
+    // генерируем __init_globals__ и вызываем в начале main
+    bool has_complex = false;
+    for (auto* gv : sem.globals)
+        if (!is_const_init(*gv->init)) { has_complex = true; break; }
+
+    if (has_complex) {
+        IRFunction init_fn;
+        init_fn.name       = "__init_globals__";
+        init_fn.num_params = 0;
+        init_fn.num_locals = 0;
+        init_fn.ret_type   = TYPE_VOID;
+
+        int next_temp = 0;
+        FnCtx init_ctx{init_fn, next_temp};
+
+        for (int i = 0; i < static_cast<int>(sem.globals.size()); ++i) {
+            auto& gv = *sem.globals[i];
+            if (is_const_init(*gv.init)) continue; // константы уже обработаны
+            auto val = lower_expr(*gv.init, init_ctx, irp);
+            init_ctx.emit(Copy{GlobalVar{i, gv.name}, val});
+        }
+        init_ctx.emit(Return{});
+        irp.functions.push_back(std::move(init_fn));
+
+        // Вставляем CALL __init_globals__ в начало main
+        if (irp.main_idx >= 0) {
+            auto& main_fn = irp.functions[irp.main_idx];
+            std::vector<Instr> prefix;
+            prefix.push_back(Call{std::nullopt, "__init_globals__", {}});
+            prefix.insert(prefix.end(), main_fn.body.begin(), main_fn.body.end());
+            main_fn.body = std::move(prefix);
+        }
+    }
+
+    return irp;
+}
+
+// IR печать
+std::string operand_to_str(const Operand& o) {
+    return std::visit([](auto&& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, TempVar>)
+            return "t" + std::to_string(v.id);
+        else if constexpr (std::is_same_v<T, LocalVar>)
+            return v.name.empty() ? ("loc" + std::to_string(v.slot)) : v.name;
+        else if constexpr (std::is_same_v<T, GlobalVar>)
+            return "@" + v.name;
+        else if constexpr (std::is_same_v<T, ConstInt>)
+            return std::to_string(v.v);
+        else if constexpr (std::is_same_v<T, ConstUInt>)
+            return std::to_string(v.v) + "u";
+        else if constexpr (std::is_same_v<T, ConstFloat>)
+            return std::to_string(v.v);
+        else if constexpr (std::is_same_v<T, ConstBool>)
+            return v.v ? "true" : "false";
+        else if constexpr (std::is_same_v<T, ConstString>)
+            return "\"" + v.v + "\"";
+        else
+            return "unit";
+    }, o);
+}
+
+static const char* ibin_str(IBinOp o) {
+    switch(o){case IBinOp::Add:return"+";case IBinOp::Sub:return"-";
+    case IBinOp::Mul:return"*";case IBinOp::Div:return"/";case IBinOp::Mod:return"%";
+    case IBinOp::IEq:return"==";case IBinOp::INeq:return"!=";
+    case IBinOp::ILt:return"<";case IBinOp::ILe:return"<=";
+    case IBinOp::IGt:return">";case IBinOp::IGe:return">=";
+    default:return"?";}
+}
+static const char* fbin_str(FBinOp o) {
+    switch(o){case FBinOp::Add:return"f+";case FBinOp::Sub:return"f-";
+    case FBinOp::Mul:return"f*";case FBinOp::Div:return"f/";
+    case FBinOp::FEq:return"f==";case FBinOp::FNeq:return"f!=";
+    case FBinOp::FLt:return"f<";case FBinOp::FLe:return"f<=";
+    case FBinOp::FGt:return"f>";case FBinOp::FGe:return"f>=";
+    default:return"?";}
+}
+
+void dump_ir(const IRProgram& prog, std::ostream& out) {
+    for (int i=0;i<static_cast<int>(prog.global_names.size());++i)
+        out << "global @" << prog.global_names[i] << " = "
+            << operand_to_str(prog.global_inits[i]) << "\n";
+    out << "\n";
+
+    for (auto& fn : prog.functions) {
+        out << "fun " << fn.name << " (" << fn.num_params << " params, "
+            << fn.num_locals << " locals):\n";
+        for (auto& instr : fn.body) {
+            out << "  ";
+            std::visit([&](auto&& v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T,Label>)
+                    out << v.name << ":\n";
+                else if constexpr (std::is_same_v<T,IBinInstr>)
+                    out << operand_to_str(v.dst)<<" = "
+                        <<operand_to_str(v.lhs)<<" "<<ibin_str(v.op)<<" "<<operand_to_str(v.rhs);
+                else if constexpr (std::is_same_v<T,FBinInstr>)
+                    out << operand_to_str(v.dst)<<" = "
+                        <<operand_to_str(v.lhs)<<" "<<fbin_str(v.op)<<" "<<operand_to_str(v.rhs);
+                else if constexpr (std::is_same_v<T,LBinInstr>)
+                    out << operand_to_str(v.dst)<<" = "
+                        <<operand_to_str(v.lhs)<<(v.op==LBinOp::And?" and ":" or ")<<operand_to_str(v.rhs);
+                else if constexpr (std::is_same_v<T,IUnInstr>)
+                    out << operand_to_str(v.dst)<<" = -"<<operand_to_str(v.src);
+                else if constexpr (std::is_same_v<T,FUnInstr>)
+                    out << operand_to_str(v.dst)<<" = f-"<<operand_to_str(v.src);
+                else if constexpr (std::is_same_v<T,LUnInstr>)
+                    out << operand_to_str(v.dst)<<" = not "<<operand_to_str(v.src);
+                else if constexpr (std::is_same_v<T,Copy>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src);
+                else if constexpr (std::is_same_v<T,SBinInstr>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<"++str"<<operand_to_str(v.rhs);
+                else if constexpr (std::is_same_v<T,StrLen>)
+                    out << operand_to_str(v.dst)<<" = strlen("<<operand_to_str(v.src)<<")";
+                else if constexpr (std::is_same_v<T,ArrayLen>)
+                    out << operand_to_str(v.dst)<<" = arrlen("<<operand_to_str(v.src)<<")";
+                else if constexpr (std::is_same_v<T,SEqInstr>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<(v.eq?" seq ":" sneq ")<<operand_to_str(v.rhs);
+                else if constexpr (std::is_same_v<T,NewArray>)
+                    out << operand_to_str(v.dst)<<" = new_array["<<v.size<<"]";
+                else if constexpr (std::is_same_v<T,ArrayGet>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"]";
+                else if constexpr (std::is_same_v<T,ArraySet>)
+                    out << operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"] = "<<operand_to_str(v.val);
+                else if constexpr (std::is_same_v<T,NewStruct>)
+                    out << operand_to_str(v.dst)<<" = new_struct "<<v.type_name;
+                else if constexpr (std::is_same_v<T,FieldGet>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.obj)<<".f"<<v.field_idx;
+                else if constexpr (std::is_same_v<T,FieldSet>)
+                    out << operand_to_str(v.obj)<<".f"<<v.field_idx<<" = "<<operand_to_str(v.val);
+                else if constexpr (std::is_same_v<T,Call>) {
+                    if (v.dst) out << operand_to_str(*v.dst)<<" = ";
+                    out << "call "<<v.fname<<"(";
+                    for(size_t i=0;i<v.args.size();++i){if(i)out<<",";out<<operand_to_str(v.args[i]);}
+                    out << ")";
+                }
+                else if constexpr (std::is_same_v<T,Cast>)
+                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src)
+                        <<" as "<<(v.to_type?v.to_type->to_string():"?");
+                else if constexpr (std::is_same_v<T,Jump>)
+                    out << "goto "<<v.label;
+                else if constexpr (std::is_same_v<T,JumpFalse>)
+                    out << "if_false "<<operand_to_str(v.cond)<<" goto "<<v.label;
+                else if constexpr (std::is_same_v<T,JumpTrue>)
+                    out << "if_true "<<operand_to_str(v.cond)<<" goto "<<v.label;
+                else if constexpr (std::is_same_v<T,Return>)
+                    out << "return";
+                else if constexpr (std::is_same_v<T,ReturnVal>)
+                    out << "return "<<operand_to_str(v.val);
+                else if constexpr (std::is_same_v<T,Print>)
+                    out << "print("<<operand_to_str(v.val)<<")";
+                else if constexpr (std::is_same_v<T,Input>)
+                    out << operand_to_str(v.dst)<<" = input()";
+                else if constexpr (std::is_same_v<T,Exit>)
+                    out << "exit("<<operand_to_str(v.code)<<")";
+                else if constexpr (std::is_same_v<T,Panic>)
+                    out << "panic("<<operand_to_str(v.msg)<<")";
+                if constexpr (!std::is_same_v<T,Label>) out << "\n";
+            }, instr);
+        }
+        out << "\n";
+    }
+}
+
+} 
