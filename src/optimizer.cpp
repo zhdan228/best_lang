@@ -177,21 +177,6 @@ static void fold_function(IRFunction& fn) {
     }
 }
 
-
-static void remove_dead_code(IRFunction& fn) {
-    std::vector<Instr> live;
-    bool reachable = true;
-    for (auto& instr : fn.body) {
-        if (std::holds_alternative<Label>(instr)) reachable = true;
-        if (reachable) live.push_back(instr);
-        if (std::holds_alternative<Jump>(instr) ||
-            std::holds_alternative<Return>(instr) ||
-            std::holds_alternative<ReturnVal>(instr))
-            reachable = false;
-    }
-    fn.body = std::move(live);
-}
-
 void optimize(IRProgram& prog) {
     for (auto& fn : prog.functions)
         fold_function(fn);
