@@ -428,5 +428,201 @@ struct FnGen {
                 pop_to(v.dst);
             }
 
+            else if constexpr (std::is_same_v<T, IR::FieldSet>) {
+                push_operand(v.obj);
+                push_operand(v.val);
+                emit(OP_FIELD_SET);
+                emit_u16((uint16_t)v.field_idx);
+            }
 
-} // namespace Codegen
+            else if constexpr (std::is_same_v<T, IR::Call>) {
+                for (auto& a : v.args) push_operand(a);
+                auto it = fn_index.find(v.fname);
+                if (it == fn_index.end())
+                    throw std::runtime_error("undefined function: " + v.fname);
+                emit(OP_CALL);
+                emit_u16(it->second);
+                if (v.dst) pop_to(*v.dst);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Cast>) {
+                push_operand(v.src);
+                emit_cast(v.from_type, v.to_type);
+                pop_to(v.dst);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Jump>) {
+                emit_jump(OP_JMP, v.label);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::JumpFalse>) {
+                push_operand(v.cond);
+                emit_jump(OP_JMP_FALSE, v.label);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::JumpTrue>) {
+                push_operand(v.cond);
+                emit_jump(OP_JMP_TRUE, v.label);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Return>) {
+                emit(OP_RET);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::ReturnVal>) {
+                push_operand(v.val);
+                emit(OP_RET_VAL);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Print>) {
+                push_operand(v.val);
+                emit(OP_PRINT);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::PrintEnd>) {
+                // стек: [val, end_str] — VM снимет end_str первым
+                push_operand(v.val);
+                push_operand(v.end);
+                emit(OP_PRINT_END);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Input>) {
+                emit(OP_INPUT);
+                pop_to(v.dst);
+            }
+            else if constexpr (std::is_same_v<T, IR::InputInt>) {
+                emit(OP_INPUT_INT);
+                pop_to(v.dst);
+            }
+            else if constexpr (std::is_same_v<T, IR::InputFloat>) {
+                emit(OP_INPUT_FLOAT);
+                pop_to(v.dst);
+            }
+            else if constexpr (std::is_same_v<T, IR::ToInt>) {
+                push_operand(v.src);
+                emit(OP_TO_INT);
+                pop_to(v.dst);
+            }
+            else if constexpr (std::is_same_v<T, IR::ToFloat>) {
+                push_operand(v.src);
+                emit(OP_TO_FLOAT);
+                pop_to(v.dst);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Exit>) {
+                push_operand(v.code);
+                emit(OP_EXIT);
+            }
+
+            else if constexpr (std::is_same_v<T, IR::Panic>) {
+                push_operand(v.msg);
+                emit(OP_PANIC);
+            }
+
+        }, instr);
+    }
+};
+
+Bytecode compile(const IR::IRProgram& prog) {
+    ConstPool pool;
+    Bytecode  header(24, 0); 
+
+    // Строим индекс функций: имя → индекс
+    std::unordered_map<std::string, uint16_t> fn_index;
+    for (int i = 0; i < static_cast<int>(prog.functions.size()); ++i) {
+        fn_index[prog.functions[i].name] = (uint16_t)i;
+        pool.add_fname(prog.functions[i].name);
+    }
+
+    // Генерируем код для каждой функции
+    std::vector<FnGen> generators;
+    for (auto& fn : prog.functions)
+        generators.emplace_back(fn, pool);
+
+    for (auto& gen : generators) {
+        for (auto& instr : gen.fn.body)
+            const_cast<FnGen&>(gen).gen_instr(instr, fn_index);
+        const_cast<FnGen&>(gen).apply_backpatches();
+    }
+
+    // Секция пула констант 
+    uint32_t pool_offset = (uint32_t)header.size();
+    Bytecode pool_bytes;
+    write_u32(pool_bytes, (uint32_t)pool.count);
+    pool_bytes.insert(pool_bytes.end(), pool.data.begin(), pool.data.end());
+
+    // Секция функций 
+    uint32_t fn_offset = pool_offset + (uint32_t)pool_bytes.size();
+    Bytecode fn_bytes;
+    write_u32(fn_bytes, (uint32_t)generators.size());
+    for (auto& gen : generators) {
+        uint16_t name_idx = pool.add_fname(gen.fn.name);
+        write_u16(fn_bytes, name_idx);
+        write_u16(fn_bytes, (uint16_t)gen.fn.num_params);
+        write_u16(fn_bytes, (uint16_t)gen.total_slots());
+        write_u32(fn_bytes, (uint32_t)gen.code.size());
+        fn_bytes.insert(fn_bytes.end(), gen.code.begin(), gen.code.end());
+    }
+
+    // Секция глобальных переменных: num_globals + (const_pool_idx per global) 
+    uint32_t fn_section_end = fn_offset + (uint32_t)fn_bytes.size();
+    Bytecode glob_bytes;
+    uint32_t n_globals = (uint32_t)prog.global_inits.size();
+    write_u32(glob_bytes, n_globals);
+    for (auto& init : prog.global_inits) {
+        uint16_t cidx = std::visit([&](auto&& v) -> uint16_t {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T,IR::ConstInt>)    return pool.add_int(v.v);
+            if constexpr (std::is_same_v<T,IR::ConstUInt>)   return pool.add_uint(v.v);
+            if constexpr (std::is_same_v<T,IR::ConstFloat>)  return pool.add_float(v.v);
+            if constexpr (std::is_same_v<T,IR::ConstBool>)   return pool.add_bool(v.v);
+            if constexpr (std::is_same_v<T,IR::ConstString>) return pool.add_string(v.v);
+            return pool.add_int(0); // unit → 0
+        }, init);
+        write_u16(glob_bytes, cidx);
+    }
+
+    // Таблица отладки 
+    uint32_t glob_offset = fn_section_end;
+    uint32_t dbg_offset  = glob_offset + (uint32_t)glob_bytes.size();
+    Bytecode dbg_bytes;
+    write_u32(dbg_bytes, 0); 
+
+    // Пересчитываем пул после добавления инициализаторов 
+    Bytecode pool_bytes2;
+    write_u32(pool_bytes2, (uint32_t)pool.count);
+    pool_bytes2.insert(pool_bytes2.end(), pool.data.begin(), pool.data.end());
+    // Пересчитываем смещения
+    pool_offset   = (uint32_t)header.size();
+    fn_offset     = pool_offset + (uint32_t)pool_bytes2.size();
+    glob_offset   = fn_offset   + (uint32_t)fn_bytes.size();
+    dbg_offset    = glob_offset + (uint32_t)glob_bytes.size();
+
+    // Собираем заголовок 
+    header[0] = 0x42; header[1] = 0x4C;
+    header[2] = 0x01; header[3] = 0x00;
+    patch_u32(header, 4,  pool_offset);
+    patch_u32(header, 8,  fn_offset);
+    patch_u32(header, 12, dbg_offset);
+    uint32_t main_idx = (uint32_t)(prog.main_idx >= 0 ? prog.main_idx : 0);
+    patch_u32(header, 16, main_idx);
+    patch_u32(header, 20, glob_offset); // смещение секции глобальных переменных
+
+    // Финальный результат 
+    Bytecode out;
+    out.insert(out.end(), header.begin(),    header.end());
+    out.insert(out.end(), pool_bytes2.begin(), pool_bytes2.end());
+    out.insert(out.end(), fn_bytes.begin(),  fn_bytes.end());
+    out.insert(out.end(), glob_bytes.begin(),glob_bytes.end());
+    out.insert(out.end(), dbg_bytes.begin(), dbg_bytes.end());
+    return out;
+}
+
+bool write_blc(const Bytecode& bc, const std::string& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(bc.data()), (std::streamsize)bc.size());
+    return f.good();
+}
+
+} 
