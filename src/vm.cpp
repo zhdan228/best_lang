@@ -27,13 +27,7 @@ namespace VM {
 
 #ifdef DEBUG_VM
 static void dbg(const std::vector<VM::Value>& s, const char* op) {
-    std::cerr << op << " depth=" << s.size();
-    if (!s.empty()) {
-        auto& v=s.back();
-        if (v.kind==VM::Value::Kind::Int) std::cerr << " top="<<v.i;
-        else if (v.kind==VM::Value::Kind::Float) std::cerr << " top="<<v.f;
-    }
-    std::cerr << "\n";
+    std::cerr << op << " depth=" << s.size() << "\n";
 }
 #define DBG(op) dbg(stack, op)
 #else
@@ -263,6 +257,222 @@ struct VMState {
                 push(f.slots[idx]);
                 break;
             }
+            case OP_STORE: {
+                uint16_t idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                if (idx >= f.slots.size()) f.slots.resize(idx+1);
+                f.slots[idx] = pop_val();
+                break;
+            }
+            case OP_LOAD_GLOB: {
+                uint16_t idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                push(globals[idx]);
+                break;
+            }
+            case OP_STORE_GLOB: {
+                uint16_t idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                if (idx >= globals.size()) globals.resize(idx+1);
+                globals[idx] = pop_val();
+                break;
+            }
+            // Целочисленная арифметика
+            case OP_IADD: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Int; r.i=a.i+b.i; push(r); break; }
+            case OP_ISUB: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Int; r.i=a.i-b.i; push(r); break; }
+            case OP_IMUL: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Int; r.i=a.i*b.i; push(r); break; }
+            case OP_IDIV: {
+                auto b=pop_val(); auto a=pop_val();
+                if (b.i == 0) runtime_error("division by zero");
+                Value r; r.kind=Value::Kind::Int; r.i=a.i/b.i; push(r); break;
+            }
+            case OP_IMOD: {
+                auto b=pop_val(); auto a=pop_val();
+                if (b.i == 0) runtime_error("division by zero");
+                Value r; r.kind=Value::Kind::Int; r.i=a.i%b.i; push(r); break;
+            }
+            case OP_INEG: { auto a=pop_val(); Value r; r.kind=Value::Kind::Int; r.i=-a.i; push(r); break; }
+            // Вещественная арифметика 
+            case OP_FADD: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=a.f+b.f; push(r); break; }
+            case OP_FSUB: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=a.f-b.f; push(r); break; }
+            case OP_FMUL: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=a.f*b.f; push(r); break; }
+            case OP_FDIV: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=a.f/b.f; push(r); break; }
+            case OP_FNEG: { auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=-a.f; push(r); break; }
+            // Логические операции
+            case OP_BAND: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=a.b&&b.b; push(r); break; }
+            case OP_BOR:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=a.b||b.b; push(r); break; }
+            case OP_BNOT: { auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=!a.b; push(r); break; }
+            // Целочисленные сравнения
+            case OP_IEQ: {
+                auto b=pop_val(); auto a=pop_val();
+                Value r; r.kind=Value::Kind::Bool;
+                if (a.kind==Value::Kind::Unit || b.kind==Value::Kind::Unit)
+                    r.b = (a.kind == b.kind);
+                else
+                    r.b = (a.i == b.i);
+                push(r); break;
+            }
+            case OP_INEQ: {
+                auto b=pop_val(); auto a=pop_val();
+                Value r; r.kind=Value::Kind::Bool;
+                if (a.kind==Value::Kind::Unit || b.kind==Value::Kind::Unit)
+                    r.b = (a.kind != b.kind);
+                else
+                    r.b = (a.i != b.i);
+                push(r); break;
+            }
+            case OP_ILT:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.i <b.i); push(r); break; }
+            case OP_IGT:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.i >b.i); push(r); break; }
+            case OP_ILTE: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.i<=b.i); push(r); break; }
+            case OP_IGTE: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.i>=b.i); push(r); break; }
+            // Вещественные сравнения 
+            case OP_FEQ:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f==b.f); push(r); break; }
+            case OP_FNEQ: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f!=b.f); push(r); break; }
+            case OP_FLT:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f <b.f); push(r); break; }
+            case OP_FGT:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f >b.f); push(r); break; }
+            case OP_FLTE: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f<=b.f); push(r); break; }
+            case OP_FGTE: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(a.f>=b.f); push(r); break; }
+            // Сравнения строк
+            case OP_SEQ:  { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(*a.str==*b.str); push(r); break; }
+            case OP_SNEQ: { auto b=pop_val(); auto a=pop_val(); Value r; r.kind=Value::Kind::Bool; r.b=(*a.str!=*b.str); push(r); break; }
+            // Управление потоком 
+            case OP_JMP: {
+                int16_t off = (int16_t)((uint16_t)code[pc]|((uint16_t)code[pc+1]<<8));
+                pc += 2;
+                pc = (size_t)((int64_t)pc + off);
+                break;
+            }
+            case OP_JMP_FALSE: {
+                int16_t off = (int16_t)((uint16_t)code[pc]|((uint16_t)code[pc+1]<<8));
+                pc += 2;
+                auto cond = pop_val();
+                if (!cond.b) pc = (size_t)((int64_t)pc + off);
+                break;
+            }
+            case OP_JMP_TRUE: {
+                int16_t off = (int16_t)((uint16_t)code[pc]|((uint16_t)code[pc+1]<<8));
+                pc += 2;
+                auto cond = pop_val();
+                if (cond.b) pc = (size_t)((int64_t)pc + off);
+                break;
+            }
+            case OP_CALL: {
+                uint16_t fn_idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                const FnRecord& callee = mod.functions[fn_idx];
+                std::vector<Value> args(callee.num_params);
+                for (int i = callee.num_params - 1; i >= 0; --i)
+                    args[i] = pop_val();
+                // Создаём новый фрейм
+                Frame nf;
+                nf.fn = &callee;
+                nf.pc = 0;
+                nf.slots.resize(callee.num_slots);
+                for (int i = 0; i < callee.num_params; ++i)
+                    nf.slots[i] = std::move(args[i]);
+                frames.push_back(std::move(nf));
+                code = callee.code;
+                // Выполнение продолжается в новом фрейме
+                break;
+            }
+            case OP_RET: {
+                frames.pop_back();
+                if (frames.empty()) return Value{};
+                code = frames.back().fn->code;
+                break;
+            }
+            case OP_RET_VAL: {
+                Value ret = pop_val();
+                frames.pop_back();
+                if (frames.empty()) return ret;
+                code = frames.back().fn->code;
+                push(ret);
+                break;
+            }
+            // Операции со стеком 
+            case OP_POP: pop_val(); break;
+            case OP_DUP: push(top()); break;
+            // Массивы 
+            case OP_NEW_ARRAY: {
+                uint16_t len = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                Value v; v.kind = Value::Kind::Array;
+                v.arr = std::make_shared<ArrayObj>();
+                v.arr->elems.resize(len);
+                push(v);
+                break;
+            }
+            case OP_ARRAY_GET: {
+                auto idx_v = pop_val();
+                auto arr_v = pop_val();
+                int64_t idx = idx_v.kind==Value::Kind::Int ? idx_v.i : (int64_t)idx_v.u;
+                if (!arr_v.arr)
+                    runtime_error("null array dereference");
+                auto& elems = arr_v.arr->elems;
+                if (idx < 0 || idx >= (int64_t)elems.size())
+                    runtime_error("index out of bounds: index " + std::to_string(idx) +
+                                  ", size " + std::to_string(elems.size()));
+                push(elems[idx]);
+                break;
+            }
+            case OP_ARRAY_SET: {
+                auto val = pop_val();
+                auto idx_v = pop_val();
+                auto arr_v = pop_val();
+                int64_t idx = idx_v.kind==Value::Kind::Int ? idx_v.i : (int64_t)idx_v.u;
+                if (!arr_v.arr) runtime_error("null array dereference");
+                auto& elems = arr_v.arr->elems;
+                if (idx < 0 || idx >= (int64_t)elems.size())
+                    runtime_error("index out of bounds: index " + std::to_string(idx) +
+                                  ", size " + std::to_string(elems.size()));
+                elems[idx] = std::move(val);
+                break;
+            }
+            case OP_ARRAY_LEN: {
+                auto arr_v = pop_val();
+                Value r; r.kind = Value::Kind::Int;
+                r.i = (int64_t)(arr_v.arr ? arr_v.arr->elems.size() : 0);
+                push(r);
+                break;
+            }
+            case OP_ARRAY_PUSH: {
+                auto val = pop_val();
+                auto arr_v = pop_val();
+                if (!arr_v.arr) runtime_error("push on null array");
+                arr_v.arr->elems.push_back(std::move(val));
+                break;
+            }
+            case OP_ARRAY_POP: {
+                auto arr_v = pop_val();
+                if (!arr_v.arr || arr_v.arr->elems.empty())
+                    runtime_error("pop on empty array");
+                push(arr_v.arr->elems.back());
+                arr_v.arr->elems.pop_back();
+                break;
+            }
+            // Структуры 
+            case OP_NEW_STRUCT: {
+                uint16_t n = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                Value v; v.kind = Value::Kind::Struct;
+                v.obj = std::make_shared<StructObj>();
+                v.obj->fields.resize(n);
+                push(v);
+                break;
+            }
+            case OP_FIELD_GET: {
+                uint16_t idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                auto s = pop_val();
+                push(s.obj->fields[idx]);
+                break;
+            }
+            case OP_FIELD_SET: {
+                uint16_t idx = (uint16_t)code[pc]|((uint16_t)code[pc+1]<<8); pc+=2;
+                auto val = pop_val();
+                auto s   = pop_val();
+                s.obj->fields[idx] = std::move(val);
+                break;
+            }
+            // Строки
+            case OP_STR_CONCAT: {
+                auto b = pop_val(); auto a = pop_val();
+                Value r; r.kind = Value::Kind::Str;
+                r.str = std::make_shared<std::string>(*a.str + *b.str);
+                push(r);
     }
 };
 
