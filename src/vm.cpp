@@ -25,16 +25,6 @@
 
 namespace VM {
 
-#ifdef DEBUG_VM
-static void dbg(const std::vector<VM::Value>& s, const char* op) {
-    std::cerr << op << " depth=" << s.size() << "\n";
-}
-#define DBG(op) dbg(stack, op)
-#else
-#define DBG(op)
-#endif
-
-
 using namespace Codegen;
 static uint8_t  rd_u8 (const uint8_t* d, size_t& p) { return d[p++]; }
 static uint16_t rd_u16(const uint8_t* d, size_t& p) {
@@ -117,6 +107,7 @@ static Module load(const std::vector<uint8_t>& bc) {
     size_t p = 4;
     uint32_t pool_off = rd_u32(d, p);
     uint32_t fn_off   = rd_u32(d, p);
+    rd_u32(d, p); // смещение таблицы отладки (пока не используется)
     uint32_t main_idx  = rd_u32(d, p);
     uint32_t glob_off  = rd_u32(d, p); // смещение секции глобальных переменных
 
@@ -473,7 +464,209 @@ struct VMState {
                 Value r; r.kind = Value::Kind::Str;
                 r.str = std::make_shared<std::string>(*a.str + *b.str);
                 push(r);
+                break;
+            }
+            case OP_STR_LEN: {
+                auto s = pop_val();
+                Value r; r.kind = Value::Kind::UInt;
+                r.u = s.str ? s.str->size() : 0;
+                push(r);
+                break;
+            }
+            // Приведения типов 
+            case OP_I2F: { auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=(double)a.i; push(r); break; }
+            case OP_F2I: {
+                auto a = pop_val();
+                if (std::isnan(a.f)||std::isinf(a.f))
+                    runtime_error("invalid cast: NaN or Inf to integer");
+                Value r; r.kind=Value::Kind::Int; r.i=(int64_t)a.f; push(r); break;
+            }
+            case OP_F32_F64: {break; }
+            case OP_F64_F32: { auto a=pop_val(); Value r; r.kind=Value::Kind::Float; r.f=(float)a.f; push(r); break; }
+            case OP_ITRUNC: {
+                uint8_t bits = code[pc++];
+                auto a = pop_val();
+                uint64_t raw = (a.kind==Value::Kind::UInt) ? a.u : (uint64_t)a.i;
+                uint64_t mask = (bits >= 64) ? ~0ULL : ((1ULL<<bits)-1);
+                Value r; r.kind=Value::Kind::Int; r.i = (int64_t)(raw & mask); push(r);
+                break;
+            }
+            case OP_IEXT_S: {
+                uint8_t bits = code[pc++];
+                auto a = pop_val();
+                int64_t v = (a.kind==Value::Kind::UInt) ? (int64_t)a.u : a.i;
+                if (bits < 64) {
+                    uint64_t sign = ((uint64_t)v >> (bits-1)) & 1;
+                    if (sign) v |= (int64_t)(~0ULL << bits);
+                    else      v &= ((1LL << bits)-1);
+                }
+                Value r; r.kind=Value::Kind::Int; r.i=v; push(r);
+                break;
+            }
+            case OP_IEXT_U: {
+                uint8_t bits = code[pc++];
+                auto a = pop_val();
+                uint64_t v = (a.kind==Value::Kind::UInt) ? a.u : (uint64_t)a.i;
+                if (bits < 64) v &= ((1ULL<<bits)-1);
+                Value r; r.kind=Value::Kind::UInt; r.u=v; push(r);
+                break;
+            }
+            // Встроенные функции 
+            case OP_PRINT: {
+                auto v = pop_val();
+                switch (v.kind) {
+                case Value::Kind::Int:   std::cout << v.i;                      break;
+                case Value::Kind::UInt:  std::cout << v.u;                      break;
+                case Value::Kind::Float: std::cout << v.f;                      break;
+                case Value::Kind::Bool:  std::cout << (v.b ? "true" : "false"); break;
+                case Value::Kind::Str:   std::cout << *v.str;                   break;
+                case Value::Kind::Unit:  std::cout << "()";                     break;
+                default:                 std::cout << "<value>";                 break;
+                }
+                std::cout << "\n"; // print() всегда заканчивается переводом строки
+                break;
+            }
+
+            case OP_PRINT_END: {
+                // print(x, end="...") — окончание задаётся явно
+                auto end_v = pop_val(); // end-строка
+                auto v     = pop_val(); // значение
+                switch (v.kind) {
+                case Value::Kind::Int:   std::cout << v.i;                      break;
+                case Value::Kind::UInt:  std::cout << v.u;                      break;
+                case Value::Kind::Float: std::cout << v.f;                      break;
+                case Value::Kind::Bool:  std::cout << (v.b ? "true" : "false"); break;
+                case Value::Kind::Str:   std::cout << *v.str;                   break;
+                case Value::Kind::Unit:  std::cout << "()";                     break;
+                default:                 std::cout << "<value>";                 break;
+                }
+                // печатаем окончание из end= вместо "\n"
+                if (end_v.kind == Value::Kind::Str) std::cout << *end_v.str;
+                break;
+            }
+            case OP_INPUT: {
+                std::string line;
+                std::getline(std::cin, line);
+                Value v; v.kind = Value::Kind::Str;
+                v.str = std::make_shared<std::string>(std::move(line));
+                push(v);
+                break;
+            }
+            case OP_INPUT_INT: {
+                // читаем строку и сразу парсим как целое число
+                std::string line;
+                std::getline(std::cin, line);
+                try {
+                    Value v; v.kind = Value::Kind::Int;
+                    v.i = (int64_t)std::stol(line);
+                    push(v);
+                } catch (...) {
+                    runtime_error("input_int(): cannot parse \"" + line + "\" as integer");
+                }
+                break;
+            }
+            case OP_INPUT_FLOAT: {
+                // читаем строку и сразу парсим как вещественное
+                std::string line;
+                std::getline(std::cin, line);
+                try {
+                    Value v; v.kind = Value::Kind::Float;
+                    v.f = std::stod(line);
+                    push(v);
+                } catch (...) {
+                    runtime_error("input_float(): cannot parse \"" + line + "\" as float");
+                }
+                break;
+            }
+            case OP_TO_INT: {
+                // преобразуем строку в int32
+                auto s = pop_val();
+                if (!s.str) runtime_error("to_int(): null string");
+                try {
+                    Value v; v.kind = Value::Kind::Int;
+                    v.i = (int64_t)std::stol(*s.str);
+                    push(v);
+                } catch (...) {
+                    runtime_error("to_int(): cannot parse \"" + *s.str + "\" as integer");
+                }
+                break;
+            }
+            case OP_TO_FLOAT: {
+                // преобразуем строку в float64
+                auto s = pop_val();
+                if (!s.str) runtime_error("to_float(): null string");
+                try {
+                    Value v; v.kind = Value::Kind::Float;
+                    v.f = std::stod(*s.str);
+                    push(v);
+                } catch (...) {
+                    runtime_error("to_float(): cannot parse \"" + *s.str + "\" as float");
+                }
+                break;
+            }
+            case OP_EXIT: {
+                auto code_v = pop_val();
+                int ec = (code_v.kind == Value::Kind::Int) ? static_cast<int>(code_v.i) : 0;
+                // Разматываем все фреймы
+                frames.clear();
+                Value exit_marker; exit_marker.kind = Value::Kind::Int; exit_marker.i = ec;
+                throw std::runtime_error("__exit__:" + std::to_string(ec));
+            }
+            case OP_PANIC: {
+                auto msg = pop_val();
+                std::string m = msg.str ? *msg.str : "panic";
+                runtime_error(m);
+                break;
+            }
+            default:
+                throw std::runtime_error("unknown opcode 0x" +
+                    [&]{ std::ostringstream ss; ss << std::hex << static_cast<int>(op); return ss.str(); }());
+            }
+
+            // После вызова OP_CALL нам необходимо обновить указатель кода, чтобы он соответствовал новому
+            if (op == OP_CALL) {
+                code = frames.back().fn->code;
+            }
+        }
+        return Value{};
+    }
+
+    VMResult run() {
+        try {
+            Value ret = call_function(mod.main_idx, {});
+            int ec = (ret.kind == Value::Kind::Int) ? static_cast<int>(ret.i) : 0;
+            return {ec, true, ""};
+        } catch (const std::runtime_error& e) {
+            std::string msg = e.what();
+            // Маркер завершения через exit()
+            if (msg.substr(0, 8) == "__exit__")
+                return {std::stoi(msg.substr(8)), true, ""};
+            std::cerr << msg << "\n";
+            return {1, false, msg};
+        }
     }
 };
 
-} // namespace VM
+VMResult run_bytecode(const std::vector<uint8_t>& bc) {
+    try {
+        Module m = load(bc);
+        VMState state(std::move(m));
+        return state.run();
+    } catch (const std::exception& e) {
+        std::cerr << "runtime error: " << e.what() << "\n";
+        return {1, false, e.what()};
+    }
+}
+
+VMResult run_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        std::cerr << "error: cannot open '" << path << "'\n";
+        return {1, false, "cannot open file"};
+    }
+    std::vector<uint8_t> bc((std::istreambuf_iterator<char>(f)),
+                              std::istreambuf_iterator<char>());
+    return run_bytecode(bc);
+}
+
+} 
