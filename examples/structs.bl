@@ -1,0 +1,25 @@
+
+struct Point {
+    x: float64;
+    y: float64;
+}
+
+fun make_point(x: float64, y: float64): Point {
+    return Point { x: x, y: y };
+}
+
+fun main(): int32 {
+    val p: Point = make_point(3.0, 4.0);
+    print(p.x);
+    print(p.y);
+
+    // Array demo
+    var arr: [int32; 5] = [10, 20, 30, 40, 50];
+    var i: int32 = 0;
+    while i < 5 {
+        print(arr[i]);
+        i = i + 1;
+    }
+
+    return 0;
+}

@@ -1,0 +1,6 @@
+// Hello World – the simplest BestLang program
+
+fun main(): int32 {
+    print("Hello, World!");
+    return 0;
+}

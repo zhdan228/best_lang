@@ -1,0 +1,22 @@
+
+type Meters = float64;
+type Count  = int32;
+
+namespace Math {
+    val PI: float64 = 3.141592653589793;
+}
+
+fun circle_area(r: float64): float64 {
+    return Math::PI * r * r;
+}
+
+fun main(): int32 {
+    val r: Meters = 5.0;
+    print(circle_area(r));
+
+    val x: float64 = 9.7;
+    val n: int32 = x as int32;  
+    print(n);
+
+    return 0;
+}
