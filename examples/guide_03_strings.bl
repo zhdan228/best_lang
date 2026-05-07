@@ -1,0 +1,32 @@
+
+
+fun repeat(s: string, n: int32): string {
+    var result: string = "";
+    var i: int32 = 0;
+    while i < n {
+        result = result + s;
+        i = i + 1;
+    }
+    return result;
+}
+
+fun main(): int32 {
+    val hello: string = "Hello";
+    val world: string = "World";
+
+    // Конкатенация через +
+    print(hello + ", " + world + "!");
+
+    // Сравнение строк
+    if hello == "Hello" {
+        print("strings match");
+    }
+    if hello != world {
+        print("strings differ");
+    }
+
+    // Функция repeat
+    print(repeat("ab", 4));  // abababab
+
+    return 0;
+}

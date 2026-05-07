@@ -1,0 +1,38 @@
+
+
+fun array_sum(arr: [int32; 5]): int32 {
+    var total: int32 = 0;
+    var i: int32 = 0;
+    while i < 5 {
+        total = total + arr[i];
+        i = i + 1;
+    }
+    print(arr);
+    return total;
+}
+
+fun main(): int32 {
+    // Объявление и инициализация
+    var scores: [int32; 5] = [90, 85, 78, 92, 88];
+
+    // Чтение элементов
+    print(scores[0]);  // 90
+    print(scores[4]);  // 88
+
+    // Изменение элемента
+    scores[2] = 100;
+    print(scores[2]);  // 100
+
+    // Сумма через функцию
+    print(array_sum(scores));  // 455
+
+    // Массив строк
+    var words: [string; 3] = ["alpha", "beta", "gamma"];
+    var i: int32 = 0;
+    while i < 3 {
+        print(words[i]);
+        i = i + 1;
+    }
+
+    return 0;
+}
