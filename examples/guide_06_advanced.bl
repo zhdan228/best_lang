@@ -1,0 +1,46 @@
+
+
+// Псевдоним типа — просто альтернативное имя
+type Score    = int32;
+type PlayerID = uint64;
+
+// Пространство имён с константами
+namespace Config {
+    val MAX_SCORE: int32   = 100;
+    val MIN_SCORE: int32   = 0;
+    val GAME_NAME: string  = "BestGame";
+}
+
+namespace Math {
+    val PI:    float64 = 3.141592653589793;
+    val E:     float64 = 2.718281828459045;
+}
+
+fun clamp(value: Score, lo: Score, hi: Score): Score {
+    if value < lo { return lo; }
+    if value > hi { return hi; }
+    return value;
+}
+
+fun main(): int32 {
+    // Псевдонимы прозрачны — Score это просто int32
+    var s: Score = 150;
+    print(clamp(s, Config::MIN_SCORE, Config::MAX_SCORE));  // 100
+
+    print(Config::GAME_NAME);  // BestGame
+
+    // Приведение типов
+    val f: float64 = 9.99;
+    val i: int32   = f as int32;   // усечение → 9
+    print(i);
+
+    val x: int32   = 42;
+    val y: float64 = x as float64;
+    print(y);   // 42
+
+    // Математические константы
+    val circle_area: float64 = Math::PI * 5.0 * 5.0;
+    print(circle_area);   // ~78.54
+
+    return 0;
+}

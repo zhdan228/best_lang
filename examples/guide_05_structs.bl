@@ -1,0 +1,52 @@
+
+
+struct Point {
+    x: float64;
+    y: float64;
+}
+
+struct Rectangle {
+    top_left:     Point;
+    bottom_right: Point;
+}
+
+fun distance(a: Point, b: Point): float64 {
+    val dx: float64 = a.x - b.x;
+    val dy: float64 = a.y - b.y;
+    // sqrt через метод Ньютона (нет встроенного sqrt)
+    val d2: float64 = dx * dx + dy * dy;
+    // простое приближение: вернём d^2 для демонстрации
+    return d2;
+}
+
+fun area(r: Rectangle): float64 {
+    val w: float64 = r.bottom_right.x - r.top_left.x;
+    val h: float64 = r.bottom_right.y - r.top_left.y;
+    return w * h;
+}
+
+fun main(): int32 {
+    // Создание структуры
+    val p1: Point = Point { x: 0.0, y: 0.0 };
+    val p2: Point = Point { x: 3.0, y: 4.0 };
+
+    print(p1.x);   // 0
+    print(p2.y);   // 4
+
+    // Изменение поля (нужен var)
+    var p3: Point = Point { x: 1.0, y: 2.0 };
+    p3.x = 10.0;
+    print(p3.x);   // 10
+
+    // Вложенные структуры
+    val rect: Rectangle = Rectangle {
+        top_left:     Point { x: 0.0, y: 0.0 },
+        bottom_right: Point { x: 5.0, y: 3.0 }
+    };
+    print(area(rect));  // 15
+
+    // distance(p1, p2) = 3^2 + 4^2 = 25
+    print(distance(p1, p2));
+
+    return 0;
+}

@@ -1,0 +1,119 @@
+/*
+ * Демонстрация всех новых возможностей BestLang
+ * Многострочный комментарий работает!
+ */
+
+type Name = string;
+
+struct Stack {
+    data: [int32];   // динамический массив
+    size: int32;
+}
+
+impl Stack {
+    fun push(self: Stack, v: int32): void {
+        self.data.push(v);
+        self.size = self.size + 1;
+    }
+
+    fun pop(self: Stack): int32 {
+        self.size = self.size - 1;
+        return self.data.pop();
+    }
+
+    fun peek(self: Stack): int32 {
+        return self.data.get(self.size - 1);
+    }
+
+    fun is_empty(self: Stack): bool {
+        return self.size == 0;
+    }
+}
+
+fun to_string(x: int32): string   { return "int"; }
+fun to_string(x: float64): string { return "float"; }
+fun to_string(x: bool): string    { return "bool"; }
+
+fun divmod(a: int32, b: int32): (int32, int32) {
+    return (a / b, a % b);
+}
+
+fun find(arr: [int32], target: int32): int32? {
+    for i in 0..5 {
+        if arr[i] == target { return i; }
+    }
+    return null;
+}
+
+fun main(): int32 {
+        print("=== for range ===");
+    var sum: int32 = 0;
+    for i in 0..10 {
+        sum = sum + i;
+    }
+    print(sum);   // 45
+
+        print("=== for C-style ===");
+    var fib_a: int32 = 0;
+    var fib_b: int32 = 1;
+    for var step: int32 = 0; step < 8; step = step + 1 {
+        print(fib_a);
+        var tmp: int32 = fib_a + fib_b;
+        fib_a = fib_b;
+        fib_b = tmp;
+    }
+
+        print("=== dynamic array ===");
+    var nums: [int32] = [];
+    for i in 0..5 {
+        nums.push(i * i);   // 0 1 4 9 16
+    }
+    print(nums.len());      // 5
+    for i in 0..5 {
+        print(nums.get(i));
+    }
+
+        print("=== Stack via impl ===");
+    var s = Stack { data: [], size: 0 };
+    s.push(10);
+    s.push(20);
+    s.push(30);
+    print(s.peek());    // 30
+    print(s.pop());     // 30
+    print(s.pop());     // 20
+    print(s.is_empty()); // false
+
+        print("=== overloading ===");
+    print(to_string(42));     // int
+    print(to_string(3.14));   // float
+    print(to_string(false));  // bool
+
+        print("=== tuples ===");
+    val qr = divmod(17, 5);
+    print(qr.0);   // 3  (частное)
+    print(qr.1);   // 2  (остаток)
+
+        print("=== nullable ===");
+    var arr: [int32; 5] = [10, 20, 30, 40, 50];
+    var idx: int32? = find(arr, 30);
+    if idx == null {
+        print("not found");
+    } else {
+        print("found");
+    }
+    idx = find(arr, 99);
+    if idx == null {
+        print("not found");
+    }
+
+        print("=== widening ===");
+    var small: int8  = 100i8;
+    var big:   int32 = 200;
+    print(small + big);   // 300  (int8 → int32 автоматически)
+
+    var n: int32   = 3;
+    var f: float64 = 0.14;
+    print(n + f);          // 3.14 (int32 → float64 автоматически)
+
+    return 0;
+}

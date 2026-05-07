@@ -1,0 +1,42 @@
+// Сортировка пузырьком на BestLang
+
+fun bubble_sort(arr: [int32; 6]): void {
+    for var i: int32 = 0; i < 5; i = i + 1 {
+        for var j: int32 = 0; j < 5 - i; j = j + 1 {
+            if arr[j] > arr[j + 1] {
+                var tmp: int32 = arr[j];
+                arr[j]     = arr[j + 1];
+                arr[j + 1] = tmp;
+            }
+        }
+    }
+}
+
+fun print_arr(arr: [int32; 6]): void {
+    for i in 0..6 {
+        print(arr[i], end=" ");
+    }
+    print("");
+}
+
+fun main(): int32 {
+    var nums: [int32; 6] = [64, 25, 12, 22, 11, 90];
+
+    print("до сортировки:");
+    print_arr(nums);
+
+    bubble_sort(nums);
+
+    print("после сортировки:");
+    print_arr(nums);
+
+    return 0;
+}
+
+/*
+ * Ожидаемый вывод:
+ * до сортировки:
+ * 64 25 12 22 11 90
+ * после сортировки:
+ * 11 12 22 25 64 90
+ */
