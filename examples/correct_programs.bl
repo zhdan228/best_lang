@@ -1,0 +1,186 @@
+/*
+ * Примеры корректных программ на BestLang.
+ * Все программы компилируются и дают правильный результат.
+ * В конце файла указан ожидаемый вывод.
+ */
+
+// Числа Фибоначчи через рекурсию
+fun fib(n: int32): int32 {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+// Максимум трёх чисел
+fun max3(a: int32, b: int32, c: int32): int32 {
+    var m: int32 = a;
+    if b > m { m = b; }
+    if c > m { m = c; }
+    return m;
+}
+
+// Проверка простого числа
+fun is_prime(n: int32): bool {
+    if n < 2 { return false; }
+    var i: int32 = 2;
+    while i * i <= n {
+        if n % i == 0 { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Структура и методы через impl
+struct Rectangle {
+    width:  int32;
+    height: int32;
+}
+
+impl Rectangle {
+    fun area(self: Rectangle): int32 {
+        return self.width * self.height;
+    }
+    fun perimeter(self: Rectangle): int32 {
+        return 2 * (self.width + self.height);
+    }
+    fun is_square(self: Rectangle): bool {
+        return self.width == self.height;
+    }
+}
+
+// Сумма элементов массива фиксированного размера
+fun array_sum(arr: [int32; 5]): int32 {
+    var total: int32 = 0;
+    for i in 0..5 {
+        total = total + arr[i];
+    }
+    return total;
+}
+
+// Перегрузка: описание разных типов
+fun describe(x: int32): string   { return "целое число"; }
+fun describe(x: float64): string { return "вещественное"; }
+fun describe(x: bool): string    { return "логическое"; }
+fun describe(x: string): string  { return "строка"; }
+
+// Кортеж: деление с остатком
+fun div_with_rem(a: int32, b: int32): (int32, int32) {
+    return (a / b, a % b);
+}
+
+// Поиск с nullable возвратом
+fun find_first_negative(arr: [int32; 6]): int32? {
+    for i in 0..6 {
+        if arr[i] < 0 { return arr[i]; }
+    }
+    return null;
+}
+
+fun main(): int32 {
+    // Числа Фибоначчи 0..7
+    for i in 0..8 {
+        print(fib(i), end=" ");
+    }
+    print("");
+
+    // Максимум из трёх
+    print(max3(10, 35, 22));
+    print(max3(100, 5, 77));
+
+    // Простые числа до 20
+    for i in 2..21 {
+        if is_prime(i) {
+            print(i, end=" ");
+        }
+    }
+    print("");
+
+    // Структура Rectangle с методами
+    val r = Rectangle { width: 6, height: 4 };
+    print(r.area());
+    print(r.perimeter());
+    print(r.is_square());
+
+    val sq = Rectangle { width: 5, height: 5 };
+    print(sq.is_square());
+
+    // Сумма массива
+    val nums: [int32; 5] = [3, 7, 2, 9, 1];
+    print(array_sum(nums));
+
+    // Перегрузка функций
+    print(describe(42));
+    print(describe(3.14));
+    print(describe(true));
+    print(describe("hello"));
+
+    // Кортеж
+    val qr = div_with_rem(17, 5);
+    print(qr.0);
+    print(qr.1);
+
+    // Динамический массив: только чётные
+    var src: [int32] = [1, 2, 3, 4, 5, 6, 7, 8];
+    var evens: [int32] = [];
+    var idx: int32 = 0;
+    val src_len: int32 = src.len() as int32;
+    while idx < src_len {
+        val x: int32 = src.get(idx);
+        if x % 2 == 0 {
+            evens.push(x);
+        }
+        idx = idx + 1;
+    }
+    val elen: int32 = evens.len() as int32;
+    for i in 0..elen {
+        print(evens.get(i), end=" ");
+    }
+    print("");
+
+    // Nullable: поиск отрицательного числа
+    var data: [int32; 6] = [5, -3, 8, 1, -7, 4];
+    val neg = find_first_negative(data);
+    if neg != null {
+        print("первое отрицательное найдено");
+    }
+
+    var nodata: [int32; 6] = [1, 2, 3, 4, 5, 6];
+    val neg2 = find_first_negative(nodata);
+    if neg2 == null {
+        print("отрицательных нет");
+    }
+
+    // Неявное расширение типов
+    var a: int8  = 50i8;
+    var b: int32 = 100;
+    print(a + b);
+
+    var n: int32    = 2;
+    var pi: float64 = 3.14159;
+    print(n + pi);
+
+    return 0;
+}
+
+/*
+ * Ожидаемый вывод:
+ * 0 1 1 2 3 5 8 13
+ * 35
+ * 100
+ * 2 3 5 7 11 13 17 19
+ * 24
+ * 20
+ * false
+ * true
+ * 22
+ * целое число
+ * вещественное
+ * логическое
+ * строка
+ * 3
+ * 2
+ * 2 4 6 8
+ * первое отрицательное найдено
+ * отрицательных нет
+ * 150
+ * 5.14159
+ */

@@ -1,0 +1,90 @@
+/*
+ * Примеры НЕПРАВИЛЬНЫХ программ на BestLang.
+ *
+ * Этот файл НЕ компилируется — он показывает какие ошибки
+ * обнаруживает компилятор. Каждый блок закомментирован
+ * с объяснением что именно неправильно.
+ */
+
+
+fun main(): int32 {
+
+    // ОШИБКА 1: присваивание в val (иммутабельную переменную)
+    // val x: int32 = 10;
+    // x = 20;
+    // Ошибка: cannot assign to immutable binding 'x'
+
+    // ОШИБКА 2: использование до объявления
+    // print(unknown_var);
+    // Ошибка: undefined identifier 'unknown_var'
+
+    // ОШИБКА 3: несовпадение типов в присваивании
+    // var s: string = 42;
+    // Ошибка: variable 's': type annotation string doesn't match initializer int32
+
+    // ОШИБКА 4: арифметика между несовместимыми типами
+    // var result = "hello" + 42;
+    // Ошибка: string concatenation requires string on both sides
+
+    // ОШИБКА 5: условие if не bool
+    // if 1 { print("yes"); }
+    // Ошибка: if condition must be bool, got int32
+
+    // ОШИБКА 6: break вне цикла
+    // break;
+    // Ошибка: break outside of loop
+
+    // ОШИБКА 7: неверный тип возврата функции
+    // fun f(): int32 { return "строка"; }
+    // Ошибка: return type mismatch: expected int32, got string
+
+    // ОШИБКА 8: не все пути возвращают значение
+    // fun g(x: int32): int32 {
+    //     if x > 0 { return 1; }
+    // }
+    // Ошибка: function 'g' does not return on all paths
+
+    // ОШИБКА 9: неверное число аргументов
+    // fun add(a: int32, b: int32): int32 { return a + b; }
+    // add(1, 2, 3);
+    // Ошибка: function 'add' expects 2 arguments, got 3
+
+    // ОШИБКА 10: индекс массива не целый
+    // var arr: [int32; 3] = [1, 2, 3];
+    // var i: float64 = 1.0;
+    // print(arr[i]);
+    // Ошибка: array index must be integer
+
+    // ОШИБКА 11: доступ к несуществующему полю структуры
+    // struct Point { x: int32; y: int32; }
+    // val p = Point { x: 1, y: 2 };
+    // print(p.z);
+    // Ошибка: struct 'Point' has no field 'z'
+
+    // ОШИБКА 12: цепочка сравнений (запрещена)
+    // var a: int32 = 5;
+    // if 1 < a < 10 { print("ok"); }
+    // Ошибка: comparison operators are non-chaining; use parentheses
+
+    // ОШИБКА 13: continue вне цикла
+    // continue;
+    // Ошибка: continue outside of loop
+
+    // ОШИБКА 14: вложенные пространства имён (не поддерживаются)
+    // namespace A { namespace B { val X: int32 = 1; } }
+    // Ошибка: вложенные пространства имён не поддерживаются
+
+    // ОШИБКА 15: вызов несуществующей функции
+    // compute_something(42);
+    // Ошибка: 'compute_something' is not a function
+
+    return 0;
+}
+
+/*
+ * Если раскомментировать ОШИБКУ 3, компилятор выведет:
+ *   examples/error_programs.bl:35:5: error: variable 's': type annotation
+ *   string doesn't match initializer int32
+ *
+ * Формат всех ошибок: файл:строка:столбец: error: описание
+ */

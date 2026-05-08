@@ -1,0 +1,65 @@
+/*
+ * Демонстрация runtime-ошибок BL-VM.
+ *
+ * Компилятор не может поймать эти ошибки заранее —
+ * они возникают во время выполнения программы.
+ */
+
+fun safe_divide(a: int32, b: int32): int32? {
+    if b == 0 { return null; }
+    return a / b;
+}
+
+fun main(): int32 {
+
+    // ПРАВИЛЬНО: проверяем делитель перед делением
+    val result = safe_divide(10, 2);
+    if result != null {
+        print("10 / 2 = ");
+        print(result);
+    }
+
+    val bad = safe_divide(10, 0);
+    if bad == null {
+        print("деление на ноль предотвращено");
+    }
+
+    // ПРАВИЛЬНО: проверяем границы массива
+    var arr: [int32; 3] = [10, 20, 30];
+    val idx: int32 = 1;
+    if idx >= 0 and idx < 3 {
+        print(arr[idx]);
+    }
+
+    // RUNTIME ОШИБКА 1: деление на ноль
+    // runtime error: division by zero at line 0
+    // var x: int32 = 5;
+    // var y: int32 = 0;
+    // print(x / y);
+
+    // RUNTIME ОШИБКА 2: выход за границы массива
+    // runtime error: index out of bounds: index 5, size 3 at line 0
+    // print(arr[5]);
+
+    // RUNTIME ОШИБКА 3: panic с сообщением пользователя
+    // runtime error: something went wrong at line 0
+    // panic("something went wrong");
+
+    // RUNTIME ОШИБКА 4: приведение NaN к целому
+    // Раскомментируй чтобы увидеть:
+    // runtime error: invalid cast: NaN or Inf to integer at line 0
+    // var inf: float64 = 1.0 / 0.0;
+    // var n: int32 = inf as int32;
+
+    print("программа завершилась без ошибок");
+    return 0;
+}
+
+/*
+ * Ожидаемый вывод (без раскомментирования):
+ * 10 / 2 =
+ * 5
+ * деление на ноль предотвращено
+ * 20
+ * программа завершилась без ошибок
+ */
