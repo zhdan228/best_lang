@@ -1,0 +1,517 @@
+//  Полный справочник синтаксиса BestLang
+
+
+/*
+    Это многострочный комментарий.
+    Он может занимать несколько строк.
+    Однострочный комментарий начинается с //
+    Комментарии никак не влияют на выполнение программы.
+*/
+
+// Создаёт новое имя для существующего типа.
+// НЕ создаёт новый тип — Meters и float64 полностью взаимозаменяемы.
+
+type Meters  = float64;
+type Count   = int32;
+type Name    = string;
+type Matrix2 = [float64; 4];   // псевдоним для массива
+
+// Группирует константы и функции под одним именем.
+// Доступ к элементам через оператор ::
+
+namespace Math {
+    val PI:  float64 = 3.141592653589793;
+    val E:   float64 = 2.718281828459045;
+    val TAU: float64 = 6.283185307179586;   // PI * 2
+}
+
+namespace Config {
+    val VERSION: string = "1.0.0";          // строки в кавычках — только ASCII
+    val MAX_SIZE: int32 = 1000;
+}
+
+// Составной тип с именованными полями. Каждое поле заканчивается ;
+
+struct Point {
+    x: float64;
+    y: float64;
+}
+
+struct Rectangle {
+    top_left:     Point;    // поле может быть другой структурой
+    bottom_right: Point;
+}
+
+struct Person {
+    name:  string;
+    age:   int32;
+    score: float64;
+}
+
+// Добавляет методы к структуре.
+// Первый параметр ВСЕГДА self: ТипСтруктуры (передаётся по значению).
+// Вызов: переменная.метод(аргументы)
+
+impl Point {
+    // метод без дополнительных аргументов
+    fun length_sq(self: Point): float64 {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    // метод с аргументом — возвращает новую точку
+    fun add(self: Point, other: Point): Point {
+        return Point { x: self.x + other.x, y: self.y + other.y };
+    }
+
+    fun scale(self: Point, k: float64): Point {
+        return Point { x: self.x * k, y: self.y * k };
+    }
+
+    // void-метод — ничего не возвращает, только выполняет действие
+    fun print_coords(self: Point): void {
+        print(self.x);
+        print(self.y);
+    }
+}
+
+impl Person {
+    fun greet(self: Person): void {
+        print("Hello, " + self.name);   // строки — только ASCII символы
+    }
+    fun is_adult(self: Person): bool {
+        return self.age >= 18;
+    }
+}
+
+// Одно имя — разные типы параметров.
+// Компилятор сам выбирает нужную версию по типу аргумента.
+
+fun show(x: int32):   void { print(x); }
+fun show(x: float64): void { print(x); }
+fun show(x: bool):    void { print(x); }
+fun show(x: string):  void { print(x); }
+
+// Перегрузка с разными типами параметров
+fun add(a: int32, b: int32): int32       { return a + b; }
+fun add(a: float64, b: float64): float64 { return a + b; }
+
+// Функция с параметрами и возвращаемым значением
+fun multiply(a: int32, b: int32): int32 {
+    return a * b;
+}
+
+// Функция без параметров
+fun get_greeting(): string {
+    return "Hello!";
+}
+
+// void-функция — ничего не возвращает, return без значения или вообще без return
+fun print_separator(): void {
+    print("---");
+}
+
+// Рекурсивная функция — вызывает сама себя
+fun factorial(n: int32): int32 {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);   // 5! = 5 * 4! = 5 * 4 * 3! ...
+}
+
+// Взаимная рекурсия — порядок объявления не важен (обе видят друг друга)
+fun is_even(n: int32): bool {
+    if n == 0 { return true; }
+    return is_odd(n - 1);
+}
+fun is_odd(n: int32): bool {
+    if n == 0 { return false; }
+    return is_even(n - 1);
+}
+
+// Функция возвращает кортеж
+fun swap(a: int32, b: int32): (int32, int32) {
+    return (b, a);   // поменяли местами — второй стал первым
+}
+
+// Функция возвращает nullable — может вернуть null
+fun find_index(arr: [int32; 5], target: int32): int32? {
+    for i in 0..5 {
+        if arr[i] == target { return i; }  // нашли — вернём индекс
+    }
+    return null;    // не нашли — вернём null
+}
+
+// Программа ВСЕГДА начинает выполнение с функции main.
+// Возвращает int32 — код завершения процесса (0 = успех, ненулевой = ошибка).
+
+fun main(): int32 {
+
+        // var — мутабельная, можно изменить после объявления
+    // val — иммутабельная, нельзя изменить (как const)
+    // Тип можно указать явно или опустить — выводится из правой части
+
+    var a: int32 = 10;     // явный тип int32
+    var b = 20;            // тип выведен автоматически → int32
+    val c: int32 = 30;     // иммутабельная
+    val d = 3.14;          // тип выведен → float64
+
+    a = 99;                // OK — var можно изменить
+    // c = 99;             ← ОШИБКА компиляции: val нельзя переприсвоить
+
+        // Целые знаковые: int8  int16  int32  int64
+    var n8:  int8  = 127i8;           // суффикс i8 задаёт тип литерала
+    var n16: int16 = 32000i16;
+    var n32: int32 = 2000000000;      // int32 — тип по умолчанию для целых
+    var n64: int64 = 9000000000i64;
+
+    // Целые беззнаковые: uint8  uint16  uint32  uint64
+    var u8:  uint8  = 255u8;
+    var u16: uint16 = 65535u16;
+    var u32: uint32 = 4000000000u32;
+    var u64: uint64 = 10000000000u64;
+
+    // Вещественные: float32  float64
+    var f32: float32 = 3.14f32;       // суффикс f32
+    var f64: float64 = 3.14159265;    // float64 — тип по умолчанию
+
+    // Логический
+    var flag: bool = true;            // только два значения: true или false
+
+    // Строка (только ASCII символы)
+    var str: string = "Hello, World!";
+
+    // void — только как тип возврата функции, не для переменных
+
+        val dec = 1_000_000;    // _ разделитель разрядов — только для читаемости
+    val hex = 0xFF;         // шестнадцатеричный: 0x префикс → 255
+    val bin = 0b1010_1100;  // двоичный: 0b префикс → 172
+    val sci = 1.5e3;        // научная запись: 1.5 * 10^3 = 1500.0
+    val sci2 = 2.5e-4;      // 2.5 * 10^(-4) = 0.00025
+
+        // Строки только из ASCII символов (латиница, цифры, спецсимволы)
+
+    val s1 = "Hello\nWorld";     // \n — перенос строки
+    val s2 = "col1\tcol2";       // \t — табуляция
+    val s3 = "say \"hi\"";       // \" — кавычка внутри строки
+    val s4 = "C:\\path\\file";   // \\ — обратный слэш
+    val s5 = "end\0null";        // \0 — нулевой символ
+    val s6 = "\x41\x42\x43";     // \xHH — символ по hex-коду (ABC)
+
+        // Оба операнда должны быть ОДНОГО типа (или один расширяется до другого)
+
+    var x: int32 = 17;
+    var y: int32 = 5;
+
+    var sum_r  = x + y;   // 22   сложение
+    var diff_r = x - y;   // 12   вычитание
+    var prod_r = x * y;   // 85   умножение
+    var quot_r = x / y;   // 3    целочисленное деление (усечение к нулю)
+    var rem_r  = x % y;   // 2    остаток (знак = знак делимого: -7 % 2 = -1)
+    var neg_r  = -x;      // -17  унарный минус
+
+        // Компилятор автоматически расширяет меньший тип до большего при операции:
+    // int8 → int16 → int32 → int64 → float64
+
+    var small: int8  = 100i8;
+    var big:   int32 = 200;
+    var auto_r = small + big;    // int8 автоматически → int32, результат 300
+
+    var ni: int32   = 7;
+    var nf: float64 = 0.5;
+    var mix = ni + nf;           // int32 автоматически → float64, результат 7.5
+
+        // Синтаксис: выражение as НовыйТип
+
+    val flt: float64 = 9.99;
+    val to_int: int32 = flt as int32;       // усечение к нулю → 9 (не округление!)
+
+    val num: int32   = 42;
+    val to_flt: float64 = num as float64;   // целое → вещественное → 42.0
+
+    val big64: int64 = 300i64;
+    val to_8: int8 = big64 as int8;         // усечение до 8 бит → 44 (300 mod 256)
+
+        // Работают ТОЛЬКО с bool. Ленивые (short-circuit):
+    // and: если левый false — правый НЕ вычисляется
+    // or:  если левый true  — правый НЕ вычисляется
+
+    val t: bool = true;
+    val f2: bool = false;
+
+    val r_and = t and f2;   // false — И: оба должны быть true
+    val r_or  = t or  f2;   // true  — ИЛИ: хотя бы один true
+    val r_not = not t;      // false — НЕ: инверсия
+
+    // Комбинирование
+    val complex = (t or f2) and not f2;   // true
+
+        // Результат всегда bool.
+    // НЕЦЕПОЧЕЧНЫЕ: a < b < c — ОШИБКА! Пиши: a < b and b < c
+
+    var p: int32 = 10;
+    var q: int32 = 20;
+
+    val eq_r  = p == q;   // false — равно
+    val neq_r = p != q;   // true  — не равно
+    val lt_r  = p <  q;   // true  — строго меньше
+    val le_r  = p <= q;   // true  — меньше или равно
+    val gt_r  = p >  q;   // false — строго больше
+    val ge_r  = p >= q;   // false — больше или равно
+
+    // Правильная цепочка сравнений:
+    val in_range = p > 0 and p < 100;     // 10 в диапазоне (0, 100)
+
+    // Строки сравниваются лексикографически — только == и !=
+    val sa: string = "abc";
+    val sb: string = "abc";
+    val str_eq = sa == sb;    // true
+    val str_ne = sa != "xyz"; // true
+
+        val hello = "Hello";
+    val world = "World";
+
+    val joined  = hello + ", " + world + "!";  // конкатенация через +
+    val str_len = hello.len();                  // длина строки → uint64
+    val len_i   = hello.len() as int32;         // привести к int32
+
+        // Тип: [ТипЭлемента; Размер]  — размер ЧАСТЬ типа, задаётся на этапе компиляции
+    // [int32; 4] и [int32; 8] — это РАЗНЫЕ типы!
+
+    var arr: [int32; 5] = [10, 20, 30, 40, 50];   // инициализация списком
+
+    val first = arr[0];    // первый элемент (индексы с нуля)
+    val last  = arr[4];    // последний элемент
+
+    arr[2] = 99;           // изменение (нужен var)
+    // arr: [10, 20, 99, 40, 50]
+
+    // val farr: [int32; 3] = [1, 2, 3];
+    // farr[0] = 5;    ← ОШИБКА: val-массив нельзя изменять
+
+        // Тип: [ТипЭлемента]  — без указания размера
+    // Размер меняется в рантайме через push/pop
+
+    var dyn: [int32] = [];      // создать пустой динамический массив
+    dyn.push(1);                 // добавить в конец
+    dyn.push(2);
+    dyn.push(3);                 // dyn: [1, 2, 3]
+
+    val dlen  = dyn.len();      // количество элементов → uint64 (= 3)
+    val elem0 = dyn.get(0);     // получить по индексу → 1
+    val elem2 = dyn.get(2);     // → 3
+    val popped = dyn.pop();     // удалить и вернуть последний → 3
+                                 // dyn: [1, 2]
+
+    // Динамический массив с начальными значениями
+    var flt_arr: [float64] = [1.0, 2.0, 3.0];
+    flt_arr.push(4.0);           // flt_arr: [1.0, 2.0, 3.0, 4.0]
+
+        // Синтаксис: ИмяСтруктуры { поле: значение, поле: значение }
+
+    val pt1 = Point { x: 3.0, y: 4.0 };    // создание структуры
+    val pt2 = Point { x: 1.0, y: 2.0 };
+
+    val px = pt1.x;   // чтение поля → 3.0
+    val py = pt1.y;   // → 4.0
+
+    var mpt = Point { x: 0.0, y: 0.0 };
+    mpt.x = 5.0;      // изменение поля (нужен var)
+    mpt.y = 6.0;
+
+    // Вложенная структура:
+    val rect = Rectangle {
+        top_left:     Point { x: 0.0, y: 0.0 },
+        bottom_right: Point { x: 10.0, y: 5.0 }
+    };
+
+    // Доступ через цепочку полей:
+    val width = rect.bottom_right.x - rect.top_left.x;   // 10.0
+
+        val len_sq  = pt1.length_sq();    // вызов без аргументов → 25.0
+    val pt_sum  = pt1.add(pt2);       // с аргументом → Point{4.0, 6.0}
+    val pt_sc   = pt1.scale(2.0);     // → Point{6.0, 8.0}
+    pt1.print_coords();               // void: просто печатает x и y
+
+    val alice = Person { name: "Alice", age: 25, score: 95.5 };
+    alice.greet();                    // печатает "Hello, Alice"
+    val adult = alice.is_adult();     // → true
+
+        // Фиксированный набор значений разных типов.
+    // Доступ к элементам: .0  .1  .2  ...
+
+    val pair: (int32, string) = (42, "hello");   // кортеж из двух элементов
+    val triple = (1, 2.0, true);                  // три разных типа
+
+    val num_el  = pair.0;      // 42     первый элемент
+    val str_el  = pair.1;      // "hello" второй элемент
+    val bool_el = triple.2;    // true   третий элемент
+
+    // Кортеж как результат функции:
+    val swapped = swap(10, 20);
+    val sw_first  = swapped.0;    // 20 — второй аргумент стал первым
+    val sw_second = swapped.1;    // 10
+
+        // T? означает «значение типа T или null».
+    // null — специальное значение «ничего нет».
+
+    var maybe: int32? = null;   // пока нет значения
+    maybe = 42;                  // теперь есть значение
+    maybe = null;                // снова ничего
+
+    var maybe_str: string? = "hello";   // есть строка
+    maybe_str = null;                    // убрали значение
+
+    // Проверка на null через == и !=
+    if maybe == null {
+        // значения нет — не обращаться!
+    }
+    if maybe != null {
+        // значение есть — можно использовать
+    }
+
+    // Функция с nullable возвратом:
+    var data: [int32; 5] = [10, 20, 30, 40, 50];
+    var found: int32? = find_index(data, 30);    // нашли → 2
+    var missed: int32? = find_index(data, 99);   // не нашли → null
+
+    if found != null {
+        // элемент найден
+    }
+    if missed == null {
+        // элемент не найден
+    }
+
+        val circ_area = Math::PI * 5.0 * 5.0;   // площадь круга радиуса 5
+    val tau_val   = Math::TAU;               // 2 * PI
+    val ver       = Config::VERSION;         // "1.0.0"
+    val max_sz    = Config::MAX_SIZE;        // 1000
+
+        // Условие ОБЯЗАНО быть bool. Фигурные скобки обязательны.
+
+    var grade: int32 = 75;
+
+    if grade >= 90 {
+        print("A");     // выполнится если grade >= 90
+    } else if grade >= 75 {
+        print("B");     // выполнится если 75 <= grade < 90
+    } else if grade >= 60 {
+        print("C");     // выполнится если 60 <= grade < 75
+    } else {
+        print("F");     // выполнится во всех остальных случаях
+    }
+
+    // if без else:
+    if grade > 50 {
+        print("passed");
+    }
+
+    // Нельзя: if 1 { }  ← ОШИБКА: нужен bool
+    // Правильно: if 1 != 0 { }
+
+        // Повторяет тело пока условие true.
+    // Условие проверяется ПЕРЕД каждой итерацией.
+
+    var counter: int32 = 0;
+    while counter < 5 {
+        counter = counter + 1;   // нет ++, только = x + 1
+    }
+    // counter == 5 после цикла
+
+    // break — немедленно выйти из цикла
+    var j: int32 = 0;
+    while j < 100 {
+        j = j + 1;
+        if j == 10 { break; }   // выйдем когда j == 10
+    }
+
+    // continue — пропустить остаток итерации, перейти к условию
+    var k: int32 = 0;
+    while k < 10 {
+        k = k + 1;
+        if k == 5 { continue; }   // пропустить код ниже когда k == 5
+        // этот код не выполнится при k == 5
+    }
+
+        // for переменная in начало..конец { }
+    // Переменная: начало, начало+1, ..., конец-1  (конец НЕ включается!)
+    // Переменная цикла создаётся автоматически с типом int32
+
+    var total: int32 = 0;
+    for i in 0..10 {
+        total = total + i;   // i = 0, 1, 2, ..., 9
+    }
+    // total == 45
+
+    // for i in 5..8 → i = 5, 6, 7 (8 не включается)
+
+    // Границы из переменных:
+    var range_start: int32 = 2;
+    var range_end:   int32 = 6;
+    var range_sum: int32 = 0;
+    for idx_r in range_start..range_end {
+        range_sum = range_sum + idx_r;  // idx_r = 2, 3, 4, 5
+    }
+
+    // break и continue работают в for:
+    var found_50: bool = false;
+    for fi2 in 0..100 {
+        if fi2 == 50 { found_50 = true; break; }  // выйти на 50
+    }
+
+        // for инициализация; условие; шаг { тело }
+    // Аналог while, но с инициализацией и шагом в заголовке
+
+    var sum_c: int32 = 0;
+    for var fi: int32 = 1; fi <= 100; fi = fi + 1 {
+        sum_c = sum_c + fi;   // сумма 1+2+...+100 = 5050
+    }
+
+    // Обратный отсчёт:
+    for var cnt: int32 = 10; cnt > 0; cnt = cnt - 1 {
+        // cnt = 10, 9, 8, ..., 1
+    }
+
+    // break и continue работают:
+    for var m: int32 = 0; m < 20; m = m + 1 {
+        if m == 15 { break; }
+    }
+
+        // Точка с запятой сама по себе — ничего не делает
+
+    ;;    // две пустые инструкции — разрешены, бесполезны
+
+        // print — вывод значения в stdout с переводом строки (\n в конце)
+    // Принимает: int8..int64, uint8..uint64, float32, float64, bool, string
+    print(42);           // целое
+    print(3.14);         // вещественное
+    print(true);         // булевое: выводит "true"
+    print("hello");      // строка
+
+    // input — читает строку из stdin (до нажатия Enter, \n не включается)
+    // Возвращает: string
+    // var line: string = input();
+
+    // exit — немедленно завершить программу с кодом возврата
+    // exit(0);    OK — успех
+    // exit(1);    ошибка
+
+    // panic — вывести сообщение об ошибке в stderr и завершить программу
+    // Формат вывода: "runtime error: сообщение at line N"
+    // panic("something went wrong");
+
+        val fact5   = factorial(5);        // 120
+    val greet   = get_greeting();      // "Hello!"
+    val even    = is_even(10);         // true
+    val odd     = is_odd(7);           // true
+
+    // Перегрузка — версия выбирается по типу аргумента:
+    show(42);        // вызовет show(x: int32)
+    show(3.14);      // вызовет show(x: float64)
+    show(true);      // вызовет show(x: bool)
+    show("text");    // вызовет show(x: string)
+
+    val si = add(1, 2);          // вызовет add(int32, int32) → 3
+    val sf = add(1.0, 2.0);      // вызовет add(float64, float64) → 3.0
+
+    print_separator();           // "---"
+
+    return 0;   // код завершения 0 = успех
+}
