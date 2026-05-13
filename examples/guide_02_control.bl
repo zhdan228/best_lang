@@ -21,9 +21,9 @@ fun sum_to(n: int32): int32 {
 }
 
 fun main(): int32 {
-    print(sign(5));    // positive
-    print(sign(-3));   // negative
-    print(sign(0));    // zero
+    print(sign(5));    
+    print(sign(-3));   
+    print(sign(0));    
 
     print(sum_to(10)); // 55 (1+2+...+10)
 

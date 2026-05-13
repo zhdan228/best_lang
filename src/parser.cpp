@@ -49,7 +49,6 @@ struct P {
     }
 
     SrcLoc loc() const { return {filename, cur().line, cur().col}; }
-    SrcLoc loc_tok(const Lexer::Token& t) const { return {filename, t.line, t.col}; }
 };
 
 static ExprPtr parse_expr(P& p);
@@ -70,7 +69,7 @@ static TypePtr parse_type(P& p) {
             p.advance();
             auto n_tok = p.expect(TK::IntLit);
             p.expect(TK::RBracket);
-            base = Type::make_array(std::move(elem), n_tok.int_val);
+            base = Type::make_array(std::move(elem), n_tok.num.i32);
         } else {
             p.expect(TK::RBracket);
             base = Type::make_dynarray(std::move(elem));
@@ -131,8 +130,8 @@ static ExprPtr parse_primary(P& p) {
         auto e = std::make_unique<IntLitExpr>();
         e->kind   = Expr::Kind::IntLit;
         e->loc    = loc;
-        e->value  = tok.int_val;
-        e->suffix = tok.int_suffix;
+        e->value  = tok.as_int();
+        e->suffix = tok.suffix;
         return e;
     }
     // вещественный литерал
@@ -141,8 +140,8 @@ static ExprPtr parse_primary(P& p) {
         auto e = std::make_unique<FloatLitExpr>();
         e->kind   = Expr::Kind::FloatLit;
         e->loc    = loc;
-        e->value  = tok.float_val;
-        e->suffix = tok.float_suffix;
+        e->value  = tok.as_float();
+        e->suffix = tok.suffix;
         return e;
     }
     // логический литерал
@@ -326,7 +325,7 @@ static ExprPtr parse_postfix(P& p) {
                 te->kind   = Expr::Kind::TupleIndex;
                 te->loc    = loc;
                 te->object = std::move(e);
-                te->index  = static_cast<int>(idx_tok.int_val);
+                te->index  = static_cast<int>(idx_tok.as_int());
                 e = std::move(te);
             } else {
                 auto fn_tok = p.expect(TK::Ident);

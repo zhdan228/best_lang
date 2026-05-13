@@ -64,7 +64,6 @@ static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog);
 static void    lower_stmt(const Stmt& s, FnCtx& ctx, IRProgram& prog);
 
 static bool is_float_type(TypePtr t) { return t && t->is_float(); }
-static bool is_string_type(TypePtr t){ return t && t->is_string(); }
 static bool is_bool_type(TypePtr t)  { return t && t->is_bool(); }
 
 static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
@@ -642,7 +641,7 @@ static IRFunction lower_function(FunDecl& fd, IRProgram& prog) {
     return fn;
 }
 
-IRProgram lower(Program& prog,
+IRProgram lower(Program& /*prog*/,
                 const Semantic::AnalysisResult& sem,
                 const std::string& /*filename*/) {
     IRProgram irp;

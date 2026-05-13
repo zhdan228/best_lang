@@ -2,6 +2,7 @@
 #include <unordered_map>
 #include <sstream>
 #include <cctype>
+#include <cstring>
 #include <stdexcept>
 
 namespace Lexer {
@@ -64,6 +65,34 @@ static int hex_val(char c) {
     return -1;
 }
 
+// Разбор одной escape-последовательности после '\'.
+// Возвращает символ или ошибку.
+static std::variant<char, LexError>
+parse_escape(Lexer& l) {
+    if (l.at_end()) return l.error("unterminated escape sequence");
+    char e = l.advance();
+    switch (e) {
+    case 'n':  return '\n';
+    case 't':  return '\t';
+    case 'r':  return '\r';
+    case '"':  return '"';
+    case '\\': return '\\';
+    case '0':  return '\0';
+    case 'x': {
+        if (l.at_end()) return l.error("incomplete \\xHH escape");
+        char h1 = l.advance();
+        if (l.at_end()) return l.error("incomplete \\xHH escape");
+        char h2 = l.advance();
+        int v1 = hex_val(h1), v2 = hex_val(h2);
+        if (v1 < 0 || v2 < 0)
+            return l.error("invalid hex digit in \\xHH escape");
+        return (char)(v1 * 16 + v2);
+    }
+    default:
+        return l.error(std::string("unknown escape sequence '\\") + e + "'");
+    }
+}
+
 // Сканирование строкового литерала (открывающая " уже поглощена)
 // Обрабатывает escape-последовательности: \n \t \r \" \\ \0 \xHH
 static std::variant<std::string, LexError>
@@ -78,31 +107,53 @@ scan_string(Lexer& l) {
             result += c;
             continue;
         }
-        
-        if (l.at_end()) return l.error("unterminated escape sequence");
-        char e = l.advance();
-        switch (e) {
-        case 'n':  result += '\n'; break;
-        case 't':  result += '\t'; break;
-        case 'r':  result += '\r'; break;
-        case '"':  result += '"';  break;
-        case '\\': result += '\\'; break;
-        case '0':  result += '\0'; break;
-        case 'x': {
-            if (l.at_end()) return l.error("incomplete \\xHH escape");
-            char h1 = l.advance();
-            if (l.at_end()) return l.error("incomplete \\xHH escape");
-            char h2 = l.advance();
-            int v1 = hex_val(h1), v2 = hex_val(h2);
-            if (v1 < 0 || v2 < 0)
-                return l.error("invalid hex digit in \\xHH escape");
-            result += (char)(v1 * 16 + v2);
-            break;
-        }
-        default:
-            return l.error(std::string("unknown escape sequence '\\") + e + "'");
-        }
+        auto esc = parse_escape(l);
+        if (auto* err = std::get_if<LexError>(&esc)) return *err;
+        result += std::get<char>(esc);
     }
+}
+
+// Возможные суффиксы целых литералов
+enum class IntSuffix {
+    None,
+    I8, I16, I32, I64,
+    U8, U16, U32, U64
+};
+
+// Преобразует суффикс в строку для хранения в токене
+static std::string int_suffix_str(IntSuffix s) {
+    switch (s) {
+    case IntSuffix::I8:  return "i8";  case IntSuffix::I16: return "i16";
+    case IntSuffix::I32: return "i32"; case IntSuffix::I64: return "i64";
+    case IntSuffix::U8:  return "u8";  case IntSuffix::U16: return "u16";
+    case IntSuffix::U32: return "u32"; case IntSuffix::U64: return "u64";
+    default: return "";
+    }
+}
+
+// Пытается прочитать суффикс целого числа: i8, i32, u64 и т.д.
+// Возвращает IntSuffix::None если суффикса нет
+static std::string scan_int_suffix(Lexer& l) {
+    struct Entry { const char* str; IntSuffix kind; };
+    // порядок важен: длинные суффиксы проверяем раньше коротких
+    static const Entry TABLE[] = {
+        {"i64", IntSuffix::I64}, {"i32", IntSuffix::I32},
+        {"i16", IntSuffix::I16}, {"i8",  IntSuffix::I8},
+        {"u64", IntSuffix::U64}, {"u32", IntSuffix::U32},
+        {"u16", IntSuffix::U16}, {"u8",  IntSuffix::U8},
+    };
+    for (auto& e : TABLE) {
+        size_t len = std::string_view(e.str).size();
+        if (l.pos + len > l.src.size()) continue;
+        if (l.src.substr(l.pos, len) != e.str) continue;
+        // проверяем что суффикс не является частью идентификатора
+        size_t after = l.pos + len;
+        if (after < l.src.size() && (std::isalnum(l.src[after]) || l.src[after] == '_'))
+            continue;
+        for (size_t k = 0; k < len; ++k) l.advance();
+        return int_suffix_str(e.kind);
+    }
+    return "";
 }
 
 // Сканирование числового литерала: десятичный, шестнадцатеричный (0x), двоичный (0b).
@@ -134,20 +185,22 @@ scan_number(Lexer& l, uint32_t start_line, uint32_t start_col) {
         }
     }
 
+    char last = raw.back();
     while (!l.at_end()) {
         char c = l.peek();
         if (c == '_') {
-            if (raw.back() == '_') return l.error("consecutive '_' in number literal");
+            if (last == '_') return l.error("consecutive '_' in number literal");
             if (l.pos + 1 >= l.src.size()) return l.error("trailing '_' in number literal");
-            raw += l.advance();
+            l.advance(); // съедаем, но не добавляем в raw
+            last = '_';
             continue;
         }
-        if (base == 16 && hex_val(c) >= 0) { raw += l.advance(); continue; }
-        if (base == 2  && (c == '0' || c == '1')) { raw += l.advance(); continue; }
-        if (base == 10 && std::isdigit(c))  { raw += l.advance(); continue; }
+        if (base == 16 && hex_val(c) >= 0) { last = c; raw += l.advance(); continue; }
+        if (base == 2  && (c == '0' || c == '1')) { last = c; raw += l.advance(); continue; }
+        if (base == 10 && std::isdigit(c))  { last = c; raw += l.advance(); continue; }
         break;
     }
-    if (!raw.empty() && raw.back() == '_')
+    if (last == '_')
         return l.error("trailing '_' in number literal");
 
     if (base == 10 && !l.at_end() && l.peek() == '.' &&
@@ -172,20 +225,19 @@ scan_number(Lexer& l, uint32_t start_line, uint32_t start_col) {
     tok.lexeme = raw;
 
     if (is_float) {
-        
+        // читаем суффикс f32 или f64
         std::string suf;
-        if (!l.at_end()) {
-            
-            if (l.peek() == 'f' &&
-                l.pos + 2 < l.src.size() &&
-                (l.src.substr(l.pos, 3) == "f32" || l.src.substr(l.pos, 3) == "f64")) {
-                suf += l.advance(); suf += l.advance(); suf += l.advance();
-            }
+        if (!l.at_end() && l.peek() == 'f' && l.pos + 2 < l.src.size() &&
+            (l.src.substr(l.pos, 3) == "f32" || l.src.substr(l.pos, 3) == "f64")) {
+            suf += l.advance(); suf += l.advance(); suf += l.advance();
         }
-        tok.float_suffix = suf;
-        tok.kind         = TokenKind::FloatLit;
+        tok.suffix = suf;
+        tok.kind   = TokenKind::FloatLit;
         try {
-            tok.float_val = std::stod(raw);
+            double d = std::stod(raw);
+            // записываем в правильное поле union
+            if (suf == "f32") tok.num.f32 = (float)d;
+            else               tok.num.f64 = d;
         } catch (...) {
             return l.error("invalid float literal '" + raw + "'");
         }
@@ -193,42 +245,116 @@ scan_number(Lexer& l, uint32_t start_line, uint32_t start_col) {
         return tok;
     }
 
-    static const std::vector<std::pair<std::string,std::string>> ISUF = {
-        {"i64","i64"},{"i32","i32"},{"i16","i16"},{"i8","i8"},
-        {"u64","u64"},{"u32","u32"},{"u16","u16"},{"u8","u8"},
-    };
-    std::string suf;
-    for (auto& [sfx, _] : ISUF) {
-        if (l.pos + sfx.size() <= l.src.size() &&
-            l.src.substr(l.pos, sfx.size()) == sfx) {
-            
-            size_t end = l.pos + sfx.size();
-            if (end >= l.src.size() || !std::isalnum(l.src[end]) && l.src[end] != '_') {
-                for (size_t k = 0; k < sfx.size(); ++k) l.advance();
-                suf = sfx;
-                break;
-            }
-        }
-    }
-    tok.int_suffix = suf;
-    tok.kind       = TokenKind::IntLit;
-
-    std::string clean;
-    for (char c : raw)
-        if (c != '_') clean += c;
+    tok.suffix = scan_int_suffix(l);
+    tok.kind   = TokenKind::IntLit;
 
     try {
-        if (base == 10)
-            tok.int_val = (int64_t)std::stoull(clean, nullptr, 10);
-        else if (base == 16) {
-            tok.int_val = (int64_t)std::stoull(clean.substr(2), nullptr, 16);
-        } else {
-            tok.int_val = (int64_t)std::stoull(clean.substr(2), nullptr, 2);
-        }
+        uint64_t u = (base == 10)  ? std::stoull(raw, nullptr, 10)
+                   : (base == 16)  ? std::stoull(raw.substr(2), nullptr, 16)
+                   :                 std::stoull(raw.substr(2), nullptr, 2);
+        
+        auto& s = tok.suffix;
+        if      (s == "i8")  tok.num.i8  = (int8_t)u;
+        else if (s == "i16") tok.num.i16 = (int16_t)u;
+        else if (s == "i32") tok.num.i32 = (int32_t)u;
+        else if (s == "i64") tok.num.i64 = (int64_t)u;
+        else if (s == "u8")  tok.num.u8  = (uint8_t)u;
+        else if (s == "u16") tok.num.u16 = (uint16_t)u;
+        else if (s == "u32") tok.num.u32 = (uint32_t)u;
+        else if (s == "u64") tok.num.u64 = u;
+        else                 tok.num.i32 = (int32_t)u;  // по умолчанию int32
     } catch (...) {
         return l.error("integer literal out of range: '" + raw + "'");
     }
-    tok.lexeme = raw + suf;
+    tok.lexeme = raw + tok.suffix;
+    return tok;
+}
+
+// Пропускает однострочный или многострочный комментарий.
+// Возвращает true если комментарий был пропущен.
+static bool skip_comment(Lexer& l, char c) {
+    if (c == '/' && l.peek() == '/') {
+        while (!l.at_end() && l.peek() != '\n') l.advance();
+        return true;
+    }
+    if (c == '/' && l.peek() == '*') {
+        l.advance();
+        while (!l.at_end()) {
+            char cc = l.advance();
+            if (cc == '*' && l.peek() == '/') { l.advance(); break; }
+        }
+        return true;
+    }
+    return false;
+}
+
+// Читает идентификатор или ключевое слово начиная с символа c.
+static Token scan_ident_or_keyword(Lexer& l, char c, uint32_t line, uint32_t col) {
+    std::string ident(1, c);
+    while (!l.at_end() && (std::isalnum(l.peek()) || l.peek() == '_'))
+        ident += l.advance();
+    auto it = KEYWORDS.find(ident);
+    Token tok;
+    tok.line   = line;
+    tok.col    = col;
+    tok.kind   = (it != KEYWORDS.end()) ? it->second : TokenKind::Ident;
+    tok.lexeme = ident;
+    return tok;
+}
+
+// Читает оператор или знак пунктуации.
+// Возвращает заполненный токен или ошибку.
+static std::variant<Token, LexError>
+scan_operator(Lexer& l, char c, uint32_t line, uint32_t col) {
+    auto peek2 = [&](char next) { return !l.at_end() && l.peek() == next; };
+
+    Token tok;
+    tok.line   = line;
+    tok.col    = col;
+    tok.lexeme = std::string(1, c);
+
+    switch (c) {
+    case '+': tok.kind = TokenKind::Plus;      break;
+    case '-': tok.kind = TokenKind::Minus;     break;
+    case '*': tok.kind = TokenKind::Star;      break;
+    case '/': tok.kind = TokenKind::Slash;     break;
+    case '%': tok.kind = TokenKind::Percent;   break;
+    case ',': tok.kind = TokenKind::Comma;     break;
+    case ';': tok.kind = TokenKind::Semicolon; break;
+    case '(': tok.kind = TokenKind::LParen;    break;
+    case ')': tok.kind = TokenKind::RParen;    break;
+    case '[': tok.kind = TokenKind::LBracket;  break;
+    case ']': tok.kind = TokenKind::RBracket;  break;
+    case '{': tok.kind = TokenKind::LBrace;    break;
+    case '}': tok.kind = TokenKind::RBrace;    break;
+    case '?': tok.kind = TokenKind::Question;  break;
+    case '.':
+        if (peek2('.')) { l.advance(); tok.kind = TokenKind::DotDot; tok.lexeme = ".."; }
+        else             {              tok.kind = TokenKind::Dot;                        }
+        break;
+    case '=':
+        if (peek2('=')) { l.advance(); tok.kind = TokenKind::EqEq;   tok.lexeme = "=="; }
+        else             {              tok.kind = TokenKind::Assign;                     }
+        break;
+    case '!':
+        if (peek2('=')) { l.advance(); tok.kind = TokenKind::BangEq; tok.lexeme = "!="; }
+        else return l.error(std::string("unexpected character '") + c + "'");
+        break;
+    case '<':
+        if (peek2('=')) { l.advance(); tok.kind = TokenKind::LtEq;   tok.lexeme = "<="; }
+        else             {              tok.kind = TokenKind::Lt;                          }
+        break;
+    case '>':
+        if (peek2('=')) { l.advance(); tok.kind = TokenKind::GtEq;   tok.lexeme = ">="; }
+        else             {              tok.kind = TokenKind::Gt;                          }
+        break;
+    case ':':
+        if (peek2(':')) { l.advance(); tok.kind = TokenKind::ColonColon; tok.lexeme = "::"; }
+        else             {              tok.kind = TokenKind::Colon;                          }
+        break;
+    default:
+        return l.error(std::string("unexpected character '") + c + "'");
+    }
     return tok;
 }
 
@@ -240,6 +366,7 @@ tokenize(const std::string& source, const std::string& filename) {
     std::vector<Token> tokens;
 
     while (!l.at_end()) {
+        // пропускаем пробелы
         while (!l.at_end() && std::isspace((unsigned char)l.peek()))
             l.advance();
         if (l.at_end()) break;
@@ -251,35 +378,23 @@ tokenize(const std::string& source, const std::string& filename) {
         if ((unsigned char)c > 127)
             return l.error("non-ASCII character in source");
 
-        if (c == '/' && l.peek() == '/') {
-            while (!l.at_end() && l.peek() != '\n') l.advance();
-            continue;
-        }
-        //многострочные комментарии
-        if (c == '/' && l.peek() == '*') {
-            l.advance(); 
-            while (!l.at_end()) {
-                char cc = l.advance();
-                if (cc == '*' && l.peek() == '/') { l.advance(); break; }
-            }
-            continue;
-        }
-
-        Token tok;
-        tok.line   = tline;
-        tok.col    = tcol;
-        tok.lexeme = std::string(1, c);
+        // комментарии
+        if (skip_comment(l, c)) continue;
 
         // строковый литерал
         if (c == '"') {
             auto r = scan_string(l);
             if (auto* e = std::get_if<LexError>(&r)) return *e;
+            Token tok;
+            tok.line    = tline; tok.col = tcol;
             tok.kind    = TokenKind::StringLit;
             tok.str_val = std::get<std::string>(r);
-            tok.lexeme  = '"' + tok.str_val + '"'; 
+            tok.lexeme  = '"' + tok.str_val + '"';
             tokens.push_back(tok);
             continue;
         }
+
+        // числовой литерал
         if (std::isdigit(c)) {
             auto r = scan_number(l, tline, tcol);
             if (auto* e = std::get_if<LexError>(&r)) return *e;
@@ -287,69 +402,22 @@ tokenize(const std::string& source, const std::string& filename) {
             continue;
         }
 
+        // идентификатор или ключевое слово
         if (std::isalpha(c) || c == '_') {
-            std::string ident(1, c);
-            while (!l.at_end() && (std::isalnum(l.peek()) || l.peek() == '_'))
-                ident += l.advance();
-            auto it = KEYWORDS.find(ident);
-            tok.kind   = (it != KEYWORDS.end()) ? it->second : TokenKind::Ident;
-            tok.lexeme = ident;
-            tokens.push_back(tok);
+            tokens.push_back(scan_ident_or_keyword(l, c, tline, tcol));
             continue;
         }
-        auto peek2 = [&](char next) {
-            return !l.at_end() && l.peek() == next;
-        };
 
-        switch (c) {
-        case '+': tok.kind = TokenKind::Plus;     break;
-        case '-': tok.kind = TokenKind::Minus;    break;
-        case '*': tok.kind = TokenKind::Star;     break;
-        case '/': tok.kind = TokenKind::Slash;    break;
-        case '%': tok.kind = TokenKind::Percent;  break;
-        case ',': tok.kind = TokenKind::Comma;    break;
-        case ';': tok.kind = TokenKind::Semicolon; break;
-        case '(': tok.kind = TokenKind::LParen;   break;
-        case ')': tok.kind = TokenKind::RParen;   break;
-        case '[': tok.kind = TokenKind::LBracket; break;
-        case ']': tok.kind = TokenKind::RBracket; break;
-        case '{': tok.kind = TokenKind::LBrace;   break;
-        case '}': tok.kind = TokenKind::RBrace;   break;
-        case '.':
-            if (peek2('.')) { l.advance(); tok.kind = TokenKind::DotDot; tok.lexeme = ".."; }
-            else             {              tok.kind = TokenKind::Dot;                        }
-            break;
-        case '?': tok.kind = TokenKind::Question; break;
-        case '=':
-            if (peek2('=')) { l.advance(); tok.kind = TokenKind::EqEq;  tok.lexeme = "=="; }
-            else             {              tok.kind = TokenKind::Assign;               }
-            break;
-        case '!':
-            if (peek2('=')) { l.advance(); tok.kind = TokenKind::BangEq; tok.lexeme = "!="; }
-            else return l.error(std::string("unexpected character '") + c + "'");
-            break;
-        case '<':
-            if (peek2('=')) { l.advance(); tok.kind = TokenKind::LtEq; tok.lexeme = "<="; }
-            else             {              tok.kind = TokenKind::Lt;                       }
-            break;
-        case '>':
-            if (peek2('=')) { l.advance(); tok.kind = TokenKind::GtEq; tok.lexeme = ">="; }
-            else             {              tok.kind = TokenKind::Gt;                       }
-            break;
-        case ':':
-            if (peek2(':')) { l.advance(); tok.kind = TokenKind::ColonColon; tok.lexeme = "::"; }
-            else             {              tok.kind = TokenKind::Colon;                         }
-            break;
-        default:
-            return l.error(std::string("unexpected character '") + c + "'");
-        }
-        tokens.push_back(tok);
+        // оператор или знак пунктуации
+        auto r = scan_operator(l, c, tline, tcol);
+        if (auto* e = std::get_if<LexError>(&r)) return *e;
+        tokens.push_back(std::get<Token>(r));
     }
 
     Token eof;
-    eof.kind = TokenKind::Eof;
-    eof.line = l.line;
-    eof.col  = l.col;
+    eof.kind   = TokenKind::Eof;
+    eof.line   = l.line;
+    eof.col    = l.col;
     eof.lexeme = "<eof>";
     tokens.push_back(eof);
     return tokens;

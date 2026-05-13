@@ -58,16 +58,34 @@ enum class TokenKind {
 // Один токен из потока лексера
 struct Token {
     TokenKind   kind;
-    std::string lexeme;       // исходный текст как написан в коде
-    int64_t     int_val   = 0;    // заполняется для IntLit
-    double      float_val = 0.0;  // заполняется для FloatLit
-    std::string str_val;          // заполняется для StringLit
-    // суффиксы числовых литералов: "", "i8","i16","i32","i64","u8","u16","u32","u64"
-    std::string int_suffix;
-    // суффиксы вещественных литералов: "", "f32", "f64"
-    std::string float_suffix;
+    std::string lexeme;   // исходный текст как написан в коде
+
+    // Числовое значение: int_val, uint_val и float_val делят одну память (8 байт).
+    // Какое поле читать — определяет suffix.
+    union {
+        int8_t   i8;    // суффикс i8
+        int16_t  i16;   // суффикс i16
+        int32_t  i32;   // суффикс i32 или нет суффикса
+        int64_t  i64;   // суффикс i64
+        uint8_t  u8;    // суффикс u8
+        uint16_t u16;   // суффикс u16
+        uint32_t u32;   // суффикс u32
+        uint64_t u64;   // суффикс u64
+        float    f32;   // суффикс f32
+        double   f64;   // суффикс f64 или нет суффикса
+    } num = {};
+
+    std::string str_val;  // заполняется для StringLit
+    std::string suffix;   // суффикс типа: "i8", "u32", "f64", "" и т.д.
+
     uint32_t line = 1;
     uint32_t col  = 1;
+
+    // Вспомогательные методы для чтения нужного поля по суффиксу
+    int64_t  as_int()   const { return num.i64; }
+    uint64_t as_uint()  const { return num.u64; }
+    // float32 хранится в num.f32, float64 — в num.f64
+    double   as_float() const { return (suffix == "f32") ? (double)num.f32 : num.f64; }
 };
 
 // Ошибка лексера — всегда фатальная (одна ошибка → остановка)

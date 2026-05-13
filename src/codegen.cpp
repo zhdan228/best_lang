@@ -273,253 +273,160 @@ struct FnGen {
         }
     }
 
-    // Генерирует байткод для одной IR-инструкции
     void gen_instr(const IR::Instr& instr,
                    const std::unordered_map<std::string,uint16_t>& fn_index) {
-        std::visit([&](auto&& v) {
-            using T = std::decay_t<decltype(v)>;
 
-            if constexpr (std::is_same_v<T, IR::Label>) {
-                label_offsets[v.name] = code.size();
+        if (auto* v = std::get_if<IR::Label>(&instr)) {
+            label_offsets[v->name] = code.size();
+        }
+        else if (auto* v = std::get_if<IR::IBinInstr>(&instr)) {
+            push_operand(v->lhs); push_operand(v->rhs);
+            switch (v->op) {
+            case IR::IBinOp::Add:  emit(OP_IADD); break;
+            case IR::IBinOp::Sub:  emit(OP_ISUB); break;
+            case IR::IBinOp::Mul:  emit(OP_IMUL); break;
+            case IR::IBinOp::Div:  emit(OP_IDIV); break;
+            case IR::IBinOp::Mod:  emit(OP_IMOD); break;
+            case IR::IBinOp::IEq:  emit(OP_IEQ);  break;
+            case IR::IBinOp::INeq: emit(OP_INEQ); break;
+            case IR::IBinOp::ILt:  emit(OP_ILT);  break;
+            case IR::IBinOp::ILe:  emit(OP_ILTE); break;
+            case IR::IBinOp::IGt:  emit(OP_IGT);  break;
+            case IR::IBinOp::IGe:  emit(OP_IGTE); break;
             }
-
-            else if constexpr (std::is_same_v<T, IR::IBinInstr>) {
-                push_operand(v.lhs);
-                push_operand(v.rhs);
-                switch (v.op) {
-                case IR::IBinOp::Add:  emit(OP_IADD); break;
-                case IR::IBinOp::Sub:  emit(OP_ISUB); break;
-                case IR::IBinOp::Mul:  emit(OP_IMUL); break;
-                case IR::IBinOp::Div:  emit(OP_IDIV); break;
-                case IR::IBinOp::Mod:  emit(OP_IMOD); break;
-                case IR::IBinOp::IEq:  emit(OP_IEQ);  break;
-                case IR::IBinOp::INeq: emit(OP_INEQ); break;
-                case IR::IBinOp::ILt:  emit(OP_ILT);  break;
-                case IR::IBinOp::ILe:  emit(OP_ILTE); break;
-                case IR::IBinOp::IGt:  emit(OP_IGT);  break;
-                case IR::IBinOp::IGe:  emit(OP_IGTE); break;
-                }
-                pop_to(v.dst);
+            pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::FBinInstr>(&instr)) {
+            push_operand(v->lhs); push_operand(v->rhs);
+            switch (v->op) {
+            case IR::FBinOp::Add:  emit(OP_FADD);  break;
+            case IR::FBinOp::Sub:  emit(OP_FSUB);  break;
+            case IR::FBinOp::Mul:  emit(OP_FMUL);  break;
+            case IR::FBinOp::Div:  emit(OP_FDIV);  break;
+            case IR::FBinOp::FEq:  emit(OP_FEQ);   break;
+            case IR::FBinOp::FNeq: emit(OP_FNEQ);  break;
+            case IR::FBinOp::FLt:  emit(OP_FLT);   break;
+            case IR::FBinOp::FLe:  emit(OP_FLTE);  break;
+            case IR::FBinOp::FGt:  emit(OP_FGT);   break;
+            case IR::FBinOp::FGe:  emit(OP_FGTE);  break;
             }
-
-            else if constexpr (std::is_same_v<T, IR::FBinInstr>) {
-                push_operand(v.lhs);
-                push_operand(v.rhs);
-                switch (v.op) {
-                case IR::FBinOp::Add:  emit(OP_FADD);  break;
-                case IR::FBinOp::Sub:  emit(OP_FSUB);  break;
-                case IR::FBinOp::Mul:  emit(OP_FMUL);  break;
-                case IR::FBinOp::Div:  emit(OP_FDIV);  break;
-                case IR::FBinOp::FEq:  emit(OP_FEQ);   break;
-                case IR::FBinOp::FNeq: emit(OP_FNEQ);  break;
-                case IR::FBinOp::FLt:  emit(OP_FLT);   break;
-                case IR::FBinOp::FLe:  emit(OP_FLTE);  break;
-                case IR::FBinOp::FGt:  emit(OP_FGT);   break;
-                case IR::FBinOp::FGe:  emit(OP_FGTE);  break;
-                }
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::LBinInstr>) {
-                push_operand(v.lhs);
-                push_operand(v.rhs);
-                emit(v.op == IR::LBinOp::And ? OP_BAND : OP_BOR);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::IUnInstr>) {
-                push_operand(v.src);
-                emit(OP_INEG);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::FUnInstr>) {
-                push_operand(v.src);
-                emit(OP_FNEG);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::LUnInstr>) {
-                push_operand(v.src);
-                emit(OP_BNOT);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Copy>) {
-                push_operand(v.src);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::SBinInstr>) {
-                push_operand(v.lhs);
-                push_operand(v.rhs);
-                emit(OP_STR_CONCAT);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::StrLen>) {
-                push_operand(v.src);
-                emit(OP_STR_LEN);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ArrayLen>) {
-                push_operand(v.src);
-                emit(OP_ARRAY_LEN);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::SEqInstr>) {
-                push_operand(v.lhs);
-                push_operand(v.rhs);
-                emit(v.eq ? OP_SEQ : OP_SNEQ);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::NewArray>) {
-                emit(OP_NEW_ARRAY);
-                emit_u16((uint16_t)v.size);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::NewDynArray>) {
-                // size=0 → пустой динамический массив
-                emit(OP_NEW_ARRAY);
-                emit_u16(0);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ArrayPush>) {
-                push_operand(v.arr);
-                push_operand(v.val);
-                emit(OP_ARRAY_PUSH);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ArrayPop>) {
-                push_operand(v.arr);
-                emit(OP_ARRAY_POP);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ArrayGet>) {
-                push_operand(v.arr);
-                push_operand(v.idx);
-                emit(OP_ARRAY_GET);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ArraySet>) {
-                push_operand(v.arr);
-                push_operand(v.idx);
-                push_operand(v.val);
-                emit(OP_ARRAY_SET);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::NewStruct>) {
-                emit(OP_NEW_STRUCT);
-                emit_u16((uint16_t)v.n_fields);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::FieldGet>) {
-                push_operand(v.obj);
-                emit(OP_FIELD_GET);
-                emit_u16((uint16_t)v.field_idx);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::FieldSet>) {
-                push_operand(v.obj);
-                push_operand(v.val);
-                emit(OP_FIELD_SET);
-                emit_u16((uint16_t)v.field_idx);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Call>) {
-                for (auto& a : v.args) push_operand(a);
-                auto it = fn_index.find(v.fname);
-                if (it == fn_index.end())
-                    throw std::runtime_error("undefined function: " + v.fname);
-                emit(OP_CALL);
-                emit_u16(it->second);
-                if (v.dst) pop_to(*v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Cast>) {
-                push_operand(v.src);
-                emit_cast(v.from_type, v.to_type);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Jump>) {
-                emit_jump(OP_JMP, v.label);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::JumpFalse>) {
-                push_operand(v.cond);
-                emit_jump(OP_JMP_FALSE, v.label);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::JumpTrue>) {
-                push_operand(v.cond);
-                emit_jump(OP_JMP_TRUE, v.label);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Return>) {
-                emit(OP_RET);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::ReturnVal>) {
-                push_operand(v.val);
-                emit(OP_RET_VAL);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Print>) {
-                push_operand(v.val);
-                emit(OP_PRINT);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::PrintEnd>) {
-                // стек: [val, end_str] — VM снимет end_str первым
-                push_operand(v.val);
-                push_operand(v.end);
-                emit(OP_PRINT_END);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Input>) {
-                emit(OP_INPUT);
-                pop_to(v.dst);
-            }
-            else if constexpr (std::is_same_v<T, IR::InputInt>) {
-                emit(OP_INPUT_INT);
-                pop_to(v.dst);
-            }
-            else if constexpr (std::is_same_v<T, IR::InputFloat>) {
-                emit(OP_INPUT_FLOAT);
-                pop_to(v.dst);
-            }
-            else if constexpr (std::is_same_v<T, IR::ToInt>) {
-                push_operand(v.src);
-                emit(OP_TO_INT);
-                pop_to(v.dst);
-            }
-            else if constexpr (std::is_same_v<T, IR::ToFloat>) {
-                push_operand(v.src);
-                emit(OP_TO_FLOAT);
-                pop_to(v.dst);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Exit>) {
-                push_operand(v.code);
-                emit(OP_EXIT);
-            }
-
-            else if constexpr (std::is_same_v<T, IR::Panic>) {
-                push_operand(v.msg);
-                emit(OP_PANIC);
-            }
-
-        }, instr);
+            pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::LBinInstr>(&instr)) {
+            push_operand(v->lhs); push_operand(v->rhs);
+            emit(v->op == IR::LBinOp::And ? OP_BAND : OP_BOR);
+            pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::IUnInstr>(&instr)) {
+            push_operand(v->src); emit(OP_INEG); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::FUnInstr>(&instr)) {
+            push_operand(v->src); emit(OP_FNEG); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::LUnInstr>(&instr)) {
+            push_operand(v->src); emit(OP_BNOT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::Copy>(&instr)) {
+            push_operand(v->src); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::SBinInstr>(&instr)) {
+            push_operand(v->lhs); push_operand(v->rhs);
+            emit(OP_STR_CONCAT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::StrLen>(&instr)) {
+            push_operand(v->src); emit(OP_STR_LEN); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ArrayLen>(&instr)) {
+            push_operand(v->src); emit(OP_ARRAY_LEN); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::SEqInstr>(&instr)) {
+            push_operand(v->lhs); push_operand(v->rhs);
+            emit(v->eq ? OP_SEQ : OP_SNEQ); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::NewArray>(&instr)) {
+            emit(OP_NEW_ARRAY); emit_u16((uint16_t)v->size); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::NewDynArray>(&instr)) {
+            emit(OP_NEW_ARRAY); emit_u16(0); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ArrayPush>(&instr)) {
+            push_operand(v->arr); push_operand(v->val); emit(OP_ARRAY_PUSH);
+        }
+        else if (auto* v = std::get_if<IR::ArrayPop>(&instr)) {
+            push_operand(v->arr); emit(OP_ARRAY_POP); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ArrayGet>(&instr)) {
+            push_operand(v->arr); push_operand(v->idx);
+            emit(OP_ARRAY_GET); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ArraySet>(&instr)) {
+            push_operand(v->arr); push_operand(v->idx);
+            push_operand(v->val); emit(OP_ARRAY_SET);
+        }
+        else if (auto* v = std::get_if<IR::NewStruct>(&instr)) {
+            emit(OP_NEW_STRUCT); emit_u16((uint16_t)v->n_fields); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::FieldGet>(&instr)) {
+            push_operand(v->obj); emit(OP_FIELD_GET);
+            emit_u16((uint16_t)v->field_idx); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::FieldSet>(&instr)) {
+            push_operand(v->obj); push_operand(v->val);
+            emit(OP_FIELD_SET); emit_u16((uint16_t)v->field_idx);
+        }
+        else if (auto* v = std::get_if<IR::Call>(&instr)) {
+            for (auto& a : v->args) push_operand(a);
+            auto it = fn_index.find(v->fname);
+            if (it == fn_index.end())
+                throw std::runtime_error("undefined function: " + v->fname);
+            emit(OP_CALL); emit_u16(it->second);
+            if (v->dst) pop_to(*v->dst);
+        }
+        else if (auto* v = std::get_if<IR::Cast>(&instr)) {
+            push_operand(v->src); emit_cast(v->from_type, v->to_type); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::Jump>(&instr)) {
+            emit_jump(OP_JMP, v->label);
+        }
+        else if (auto* v = std::get_if<IR::JumpFalse>(&instr)) {
+            push_operand(v->cond); emit_jump(OP_JMP_FALSE, v->label);
+        }
+        else if (auto* v = std::get_if<IR::JumpTrue>(&instr)) {
+            push_operand(v->cond); emit_jump(OP_JMP_TRUE, v->label);
+        }
+        else if (std::get_if<IR::Return>(&instr)) {
+            emit(OP_RET);
+        }
+        else if (auto* v = std::get_if<IR::ReturnVal>(&instr)) {
+            push_operand(v->val); emit(OP_RET_VAL);
+        }
+        else if (auto* v = std::get_if<IR::Print>(&instr)) {
+            push_operand(v->val); emit(OP_PRINT);
+        }
+        else if (auto* v = std::get_if<IR::PrintEnd>(&instr)) {
+            push_operand(v->val); push_operand(v->end); emit(OP_PRINT_END);
+        }
+        else if (auto* v = std::get_if<IR::Input>(&instr)) {
+            emit(OP_INPUT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::InputInt>(&instr)) {
+            emit(OP_INPUT_INT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::InputFloat>(&instr)) {
+            emit(OP_INPUT_FLOAT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ToInt>(&instr)) {
+            push_operand(v->src); emit(OP_TO_INT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::ToFloat>(&instr)) {
+            push_operand(v->src); emit(OP_TO_FLOAT); pop_to(v->dst);
+        }
+        else if (auto* v = std::get_if<IR::Exit>(&instr)) {
+            push_operand(v->code); emit(OP_EXIT);
+        }
+        else if (auto* v = std::get_if<IR::Panic>(&instr)) {
+            push_operand(v->msg); emit(OP_PANIC);
+        }
     }
 };
 

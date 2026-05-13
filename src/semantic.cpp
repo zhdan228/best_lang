@@ -156,12 +156,6 @@ struct Analyser {
         }
     }
 
-    // Вспомогательные методы проверки типов 
-    bool same_type(TypePtr a, TypePtr b) {
-        if (!a || !b) return false;
-        return *a == *b;
-    }
-
     TypePtr type_for_int_suffix(const std::string& suf) {
         if (suf == "i8")  return TYPE_INT8;
         if (suf == "i16") return TYPE_INT16;
