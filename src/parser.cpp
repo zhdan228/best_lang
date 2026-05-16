@@ -10,7 +10,6 @@
 #include <sstream>
 #include <cassert>
 #include <stdexcept>
-#include <functional>
 
 namespace Parser {
 
@@ -51,13 +50,34 @@ struct P {
     SrcLoc loc() const { return {filename, cur().line, cur().col}; }
 };
 
-static ExprPtr parse_expr(P& p);
-static StmtPtr parse_stmt(P& p);
-static std::unique_ptr<BlockStmt> parse_block(P& p);
-static TypePtr parse_type(P& p);
-static TopDeclPtr parse_top_decl(P& p);
+static ExprPtr parse_expr(P& p); //парсит выражение
+static StmtPtr parse_stmt(P& p); //парсит инструкцию
+static std::unique_ptr<BlockStmt> parse_block(P& p); // парсит блок в фигурных скобках
+static TypePtr parse_type(P& p); //парсит тип
+static TopDeclPtr parse_top_decl(P& p); //парсит объявление верхнего уровня: fun, struct, impl, namespace, глобальная переменная
 
 // Разбор типа: базовые типы, массивы, кортежи, nullable
+static TypePtr token_to_base_type(P& p, const Lexer::Token& tok) {
+    switch (tok.kind) {
+    case TK::Int8:    return TYPE_INT8;
+    case TK::Int16:   return TYPE_INT16;
+    case TK::Int32:   return TYPE_INT32;
+    case TK::Int64:   return TYPE_INT64;
+    case TK::UInt8:   return TYPE_UINT8;
+    case TK::UInt16:  return TYPE_UINT16;
+    case TK::UInt32:  return TYPE_UINT32;
+    case TK::UInt64:  return TYPE_UINT64;
+    case TK::Float32: return TYPE_FLOAT32;
+    case TK::Float64: return TYPE_FLOAT64;
+    case TK::Bool:    return TYPE_BOOL;
+    case TK::String:  return TYPE_STRING;
+    case TK::Void:    return TYPE_VOID;
+    case TK::Ident:   return Type::make_struct(tok.lexeme);
+    default:
+        throw p.error(tok, "expected type, got '" + tok.lexeme + "'");
+    }
+}
+
 static TypePtr parse_type(P& p) {
     TypePtr base;
 
@@ -93,24 +113,7 @@ static TypePtr parse_type(P& p) {
     else {
         auto tok = p.cur();
         p.advance();
-        switch (tok.kind) {
-        case TK::Int8:    base = TYPE_INT8;    break;
-        case TK::Int16:   base = TYPE_INT16;   break;
-        case TK::Int32:   base = TYPE_INT32;   break;
-        case TK::Int64:   base = TYPE_INT64;   break;
-        case TK::UInt8:   base = TYPE_UINT8;   break;
-        case TK::UInt16:  base = TYPE_UINT16;  break;
-        case TK::UInt32:  base = TYPE_UINT32;  break;
-        case TK::UInt64:  base = TYPE_UINT64;  break;
-        case TK::Float32: base = TYPE_FLOAT32; break;
-        case TK::Float64: base = TYPE_FLOAT64; break;
-        case TK::Bool:    base = TYPE_BOOL;    break;
-        case TK::String:  base = TYPE_STRING;  break;
-        case TK::Void:    base = TYPE_VOID;    break;
-        case TK::Ident:   base = Type::make_struct(tok.lexeme); break;
-        default:
-            throw p.error(tok, "expected type, got '" + tok.lexeme + "'");
-        }
+        base = token_to_base_type(p, tok);
     }
 
     // необязательный суффикс nullable '?'
@@ -121,7 +124,7 @@ static TypePtr parse_type(P& p) {
     return base;
 }
 
-static ExprPtr parse_primary(P& p) {
+static ExprPtr parse_primary(P& p) { //парсинг атомарного выражения
     auto loc = p.loc();
 
     // целый литерал
@@ -357,15 +360,7 @@ static ExprPtr parse_unary(P& p) {
     return parse_postfix(p);
 }
 
-// Разбор бинарных выражений с приоритетом
-// Операторы сравнения нецепочечные
-//  7: * / %
-//  6: + -
-//  5: == != < > <= >=
-//  4: not  
-//  3: and
-//  2: or
-//  1: as   
+
 static int bin_prec(TK k) {
     switch (k) {
     case TK::Star: case TK::Slash: case TK::Percent: return 7;
@@ -397,6 +392,15 @@ static BinOpKind bin_op_kind(TK k) {
     }
 }
 
+// Разбор бинарных выражений с приоритетом
+// Операторы сравнения нецепочечные
+//  7: * / %
+//  6: + -
+//  5: == != < > <= >=
+//  4: not  
+//  3: and
+//  2: or
+//  1: as   
 static ExprPtr parse_bin(P& p, int min_prec) {
     if (p.at(TK::Not) && min_prec <= 4) {
         auto loc = p.loc();
@@ -413,34 +417,19 @@ static ExprPtr parse_bin(P& p, int min_prec) {
     while (true) {
         int prec = bin_prec(p.cur().kind);
         if (prec < min_prec) break;
-            if (prec == 5) {
-            auto loc = p.loc();
-            auto op  = bin_op_kind(p.cur().kind);
-            p.advance();
-            auto rhs = parse_bin(p, prec + 1); // запрет цепочки: требуем строго выше
-            auto e = std::make_unique<BinOpExpr>();
-            e->kind = Expr::Kind::BinOp;
-            e->loc  = loc;
-            e->op   = op;
-            e->lhs  = std::move(lhs);
-            e->rhs  = std::move(rhs);
-            lhs = std::move(e);
-            // после одного сравнения — нельзя ещё одно
-            if (bin_prec(p.cur().kind) == 5)
-                throw p.error(p.cur(), "comparison operators are non-chaining; use parentheses");
-        } else {
-            auto loc = p.loc();
-            auto op  = bin_op_kind(p.cur().kind);
-            p.advance();
-            auto rhs = parse_bin(p, prec + 1);
-            auto e = std::make_unique<BinOpExpr>();
-            e->kind = Expr::Kind::BinOp;
-            e->loc  = loc;
-            e->op   = op;
-            e->lhs  = std::move(lhs);
-            e->rhs  = std::move(rhs);
-            lhs = std::move(e);
-        }
+        auto loc = p.loc();
+        auto op  = bin_op_kind(p.cur().kind);
+        p.advance();
+        auto rhs = parse_bin(p, prec + 1);
+        auto e = std::make_unique<BinOpExpr>();
+        e->kind = Expr::Kind::BinOp;
+        e->loc  = loc;
+        e->op   = op;
+        e->lhs  = std::move(lhs);
+        e->rhs  = std::move(rhs);
+        lhs = std::move(e);
+        if (prec == 5 && bin_prec(p.cur().kind) == 5)
+            throw p.error(p.cur(), "comparison operators are non-chaining; use parentheses");
     }
     return lhs;
 }
@@ -470,6 +459,36 @@ static std::unique_ptr<BlockStmt> parse_block(P& p) {
         blk->stmts.push_back(parse_stmt(p));
     p.expect(TK::RBrace);
     return blk;
+}
+
+static LValuePtr expr_to_lvalue(P& p, ExprPtr& e) {
+    if (e->kind == Expr::Kind::Ident) {
+        auto& id = static_cast<IdentExpr&>(*e);
+        auto lv = std::make_unique<LValue>();
+        lv->kind = LValue::Kind::Ident;
+        lv->loc  = id.loc;
+        lv->name = id.name;
+        return lv;
+    }
+    if (e->kind == Expr::Kind::Index) {
+        auto& ix = static_cast<IndexExpr&>(*e);
+        auto lv = std::make_unique<LValue>();
+        lv->kind = LValue::Kind::Index;
+        lv->loc  = ix.loc;
+        lv->base = expr_to_lvalue(p, ix.arr);
+        lv->idx  = std::move(ix.idx);
+        return lv;
+    }
+    if (e->kind == Expr::Kind::Field) {
+        auto& fx = static_cast<FieldExpr&>(*e);
+        auto lv = std::make_unique<LValue>();
+        lv->kind  = LValue::Kind::Field;
+        lv->loc   = fx.loc;
+        lv->base  = expr_to_lvalue(p, fx.object);
+        lv->field = fx.field_name;
+        return lv;
+    }
+    throw p.error(p.cur(), "invalid assignment target");
 }
 
 static StmtPtr parse_stmt(P& p) {
@@ -589,20 +608,7 @@ static StmtPtr parse_stmt(P& p) {
             if (p.at(TK::Assign)) {
                 p.advance();
                 auto rhs = parse_expr(p);
-                // строим lvalue from e
-                auto build = [&](ExprPtr& ep) -> LValuePtr {
-                    std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
-                        if (x->kind == Expr::Kind::Ident) {
-                            auto& id = static_cast<IdentExpr&>(*x);
-                            auto lv = std::make_unique<LValue>();
-                            lv->kind = LValue::Kind::Ident; lv->loc = id.loc; lv->name = id.name;
-                            return lv;
-                        }
-                        throw p.error(p.cur(), "invalid for-loop init lvalue");
-                    };
-                    return to_lv(ep);
-                };
-                auto lv = build(e);
+                auto lv = expr_to_lvalue(p, e);
                 auto as = std::make_unique<AssignStmt>();
                 as->kind = Stmt::Kind::Assign; as->loc = loc;
                 as->target = std::move(lv); as->value = std::move(rhs);
@@ -623,16 +629,7 @@ static StmtPtr parse_stmt(P& p) {
             if (p.at(TK::Assign)) {
                 p.advance();
                 auto rhs = parse_expr(p);
-                std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
-                    if (x->kind == Expr::Kind::Ident) {
-                        auto& id = static_cast<IdentExpr&>(*x);
-                        auto lv = std::make_unique<LValue>();
-                        lv->kind = LValue::Kind::Ident; lv->loc = id.loc; lv->name = id.name;
-                        return lv;
-                    }
-                    throw p.error(p.cur(), "invalid for-loop step lvalue");
-                };
-                auto lv = to_lv(e);
+                auto lv = expr_to_lvalue(p, e);
                 auto as = std::make_unique<AssignStmt>();
                 as->kind = Stmt::Kind::Assign; as->loc = loc;
                 as->target = std::move(lv); as->value = std::move(rhs);
@@ -665,87 +662,8 @@ static StmtPtr parse_stmt(P& p) {
     // присваивание или выражение-инструкция
     auto e = parse_expr(p);
     if (p.at(TK::Assign)) {
-        // строим lvalue из выражения
-        // только определённые формы допустимы как lvalue
-        auto build_lv = [&](ExprPtr& ep) -> LValuePtr {
-            if (ep->kind == Expr::Kind::Ident) {
-                auto& id = static_cast<IdentExpr&>(*ep);
-                auto lv = std::make_unique<LValue>();
-                lv->kind = LValue::Kind::Ident;
-                lv->loc  = id.loc;
-                lv->name = id.name;
-                return lv;
-            }
-            if (ep->kind == Expr::Kind::Index) {
-                auto base_lv = [&]() -> LValuePtr {
-                    // рекурсивно конвертируем выражение в lvalue
-                    std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
-                        if (x->kind == Expr::Kind::Ident) {
-                            auto& id = static_cast<IdentExpr&>(*x);
-                            auto lv = std::make_unique<LValue>();
-                            lv->kind = LValue::Kind::Ident;
-                            lv->loc  = id.loc;
-                            lv->name = id.name;
-                            return lv;
-                        }
-                        if (x->kind == Expr::Kind::Index) {
-                            auto& ix = static_cast<IndexExpr&>(*x);
-                            auto outer = std::make_unique<LValue>();
-                            outer->kind = LValue::Kind::Index;
-                            outer->loc  = ix.loc;
-                            outer->base = to_lv(ix.arr);
-                            outer->idx  = std::move(ix.idx);
-                            return outer;
-                        }
-                        if (x->kind == Expr::Kind::Field) {
-                            auto& fx = static_cast<FieldExpr&>(*x);
-                            auto outer = std::make_unique<LValue>();
-                            outer->kind  = LValue::Kind::Field;
-                            outer->loc   = fx.loc;
-                            outer->base  = to_lv(fx.object);
-                            outer->field = fx.field_name;
-                            return outer;
-                        }
-                        throw p.error(p.cur(), "invalid assignment target");
-                    };
-                    return to_lv(ep);
-                }();
-                return base_lv;
-            }
-            // рекурсивное преобразование в lvalue
-            std::function<LValuePtr(ExprPtr&)> to_lv = [&](ExprPtr& x) -> LValuePtr {
-                if (x->kind == Expr::Kind::Ident) {
-                    auto& id = static_cast<IdentExpr&>(*x);
-                    auto lv = std::make_unique<LValue>();
-                    lv->kind = LValue::Kind::Ident;
-                    lv->loc  = id.loc;
-                    lv->name = id.name;
-                    return lv;
-                }
-                if (x->kind == Expr::Kind::Index) {
-                    auto& ix = static_cast<IndexExpr&>(*x);
-                    auto outer = std::make_unique<LValue>();
-                    outer->kind = LValue::Kind::Index;
-                    outer->loc  = ix.loc;
-                    outer->base = to_lv(ix.arr);
-                    outer->idx  = std::move(ix.idx);
-                    return outer;
-                }
-                if (x->kind == Expr::Kind::Field) {
-                    auto& fx = static_cast<FieldExpr&>(*x);
-                    auto outer = std::make_unique<LValue>();
-                    outer->kind  = LValue::Kind::Field;
-                    outer->loc   = fx.loc;
-                    outer->base  = to_lv(fx.object);
-                    outer->field = fx.field_name;
-                    return outer;
-                }
-                throw p.error(p.cur(), "invalid assignment target");
-            };
-            return to_lv(ep);
-        };
-        auto lv = build_lv(e);
-        p.advance(); // потребляем '='
+        auto lv = expr_to_lvalue(p, e);
+        p.advance(); // '='
         auto rhs = parse_expr(p);
         p.expect(TK::Semicolon);
         auto s = std::make_unique<AssignStmt>();

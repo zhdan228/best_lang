@@ -63,8 +63,108 @@ lookup_global_slot(const IRProgram& prog, const std::string& name) {
 static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog);
 static void    lower_stmt(const Stmt& s, FnCtx& ctx, IRProgram& prog);
 
+static std::optional<Operand> lower_builtin_call(
+        const std::string& fname, const CallExpr& c, FnCtx& ctx, IRProgram& prog) {
+    if (fname == "print") {
+        auto arg = lower_expr(*c.args[0], ctx, prog);
+        Operand end_op = ConstString{"\n"};
+        bool has_end = false;
+        for (auto& na : c.named_args) {
+            if (na.name == "end") {
+                end_op  = lower_expr(*na.value, ctx, prog);
+                has_end = true;
+            }
+        }
+        if (has_end)
+            ctx.emit(PrintEnd{arg, c.args[0]->type, end_op});
+        else
+            ctx.emit(Print{arg, c.args[0]->type});
+        return ConstUnit{};
+    }
+
+    auto emit_prompt = [&]() {
+        if (!c.args.empty()) {
+            auto prompt = lower_expr(*c.args[0], ctx, prog);
+            ctx.emit(PrintEnd{prompt, TYPE_STRING, ConstString{""}});
+        }
+    };
+
+    if (fname == "input") {
+        emit_prompt();
+        auto dst = ctx.new_temp();
+        ctx.emit(Input{dst});
+        return dst;
+    }
+    if (fname == "input_int") {
+        emit_prompt();
+        auto dst = ctx.new_temp();
+        ctx.emit(InputInt{dst});
+        return dst;
+    }
+    if (fname == "input_float") {
+        emit_prompt();
+        auto dst = ctx.new_temp();
+        ctx.emit(InputFloat{dst});
+        return dst;
+    }
+    if (fname == "to_int") {
+        auto src = lower_expr(*c.args[0], ctx, prog);
+        auto dst = ctx.new_temp();
+        ctx.emit(ToInt{dst, src});
+        return dst;
+    }
+    if (fname == "to_float") {
+        auto src = lower_expr(*c.args[0], ctx, prog);
+        auto dst = ctx.new_temp();
+        ctx.emit(ToFloat{dst, src});
+        return dst;
+    }
+    if (fname == "exit") {
+        ctx.emit(Exit{lower_expr(*c.args[0], ctx, prog)});
+        return ConstUnit{};
+    }
+    if (fname == "panic") {
+        ctx.emit(Panic{lower_expr(*c.args[0], ctx, prog)});
+        return ConstUnit{};
+    }
+    return std::nullopt;
+}
+
 static bool is_float_type(TypePtr t) { return t && t->is_float(); }
 static bool is_bool_type(TypePtr t)  { return t && t->is_bool(); }
+
+static IBinOp binop_to_int(BinOpKind op) {
+    switch (op) {
+    case BinOpKind::Add: return IBinOp::Add;
+    case BinOpKind::Sub: return IBinOp::Sub;
+    case BinOpKind::Mul: return IBinOp::Mul;
+    case BinOpKind::Div: return IBinOp::Div;
+    case BinOpKind::Mod: return IBinOp::Mod;
+    case BinOpKind::Eq:  return IBinOp::IEq;
+    case BinOpKind::NEq: return IBinOp::INeq;
+    case BinOpKind::Lt:  return IBinOp::ILt;
+    case BinOpKind::Le:  return IBinOp::ILe;
+    case BinOpKind::Gt:  return IBinOp::IGt;
+    case BinOpKind::Ge:  return IBinOp::IGe;
+    default: throw std::runtime_error("unexpected int op");
+    }
+}
+
+static FBinOp binop_to_float(BinOpKind op) {
+    switch (op) {
+    case BinOpKind::Add: return FBinOp::Add;
+    case BinOpKind::Sub: return FBinOp::Sub;
+    case BinOpKind::Mul: return FBinOp::Mul;
+    case BinOpKind::Div: return FBinOp::Div;
+    case BinOpKind::Eq:  return FBinOp::FEq;
+    case BinOpKind::NEq: return FBinOp::FNeq;
+    case BinOpKind::Lt:  return FBinOp::FLt;
+    case BinOpKind::Le:  return FBinOp::FLe;
+    case BinOpKind::Gt:  return FBinOp::FGt;
+    case BinOpKind::Ge:  return FBinOp::FGe;
+    default: throw std::runtime_error("unexpected float op");
+    }
+}
 
 static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
     switch (e.kind) {
@@ -127,38 +227,9 @@ static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
             LBinOp op = (b.op == BinOpKind::And) ? LBinOp::And : LBinOp::Or;
             ctx.emit(LBinInstr{dst, op, lhs, rhs});
         } else if (fp) {
-            FBinOp op;
-            switch (b.op) {
-            case BinOpKind::Add: op=FBinOp::Add; break;
-            case BinOpKind::Sub: op=FBinOp::Sub; break;
-            case BinOpKind::Mul: op=FBinOp::Mul; break;
-            case BinOpKind::Div: op=FBinOp::Div; break;
-            case BinOpKind::Eq:  op=FBinOp::FEq;  break;
-            case BinOpKind::NEq: op=FBinOp::FNeq; break;
-            case BinOpKind::Lt:  op=FBinOp::FLt;  break;
-            case BinOpKind::Le:  op=FBinOp::FLe;  break;
-            case BinOpKind::Gt:  op=FBinOp::FGt;  break;
-            case BinOpKind::Ge:  op=FBinOp::FGe;  break;
-            default: throw std::runtime_error("unexpected float op");
-            }
-            ctx.emit(FBinInstr{dst, op, lhs, rhs});
+            ctx.emit(FBinInstr{dst, binop_to_float(b.op), lhs, rhs});
         } else {
-            IBinOp op;
-            switch (b.op) {
-            case BinOpKind::Add: op=IBinOp::Add; break;
-            case BinOpKind::Sub: op=IBinOp::Sub; break;
-            case BinOpKind::Mul: op=IBinOp::Mul; break;
-            case BinOpKind::Div: op=IBinOp::Div; break;
-            case BinOpKind::Mod: op=IBinOp::Mod; break;
-            case BinOpKind::Eq:  op=IBinOp::IEq;  break;
-            case BinOpKind::NEq: op=IBinOp::INeq; break;
-            case BinOpKind::Lt:  op=IBinOp::ILt;  break;
-            case BinOpKind::Le:  op=IBinOp::ILe;  break;
-            case BinOpKind::Gt:  op=IBinOp::IGt;  break;
-            case BinOpKind::Ge:  op=IBinOp::IGe;  break;
-            default: throw std::runtime_error("unexpected int op");
-            }
-            ctx.emit(IBinInstr{dst, op, lhs, rhs});
+            ctx.emit(IBinInstr{dst, binop_to_int(b.op), lhs, rhs});
         }
         return dst;
     }
@@ -257,72 +328,8 @@ static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
         }
 
         // Встроенные функции
-        if (fname == "print") {
-            auto arg = lower_expr(*c.args[0], ctx, prog);
-            // Ищем именованный аргумент end=
-            Operand end_op = ConstString{"\n"}; // по умолчанию перевод строки
-            bool has_end = false;
-            for (auto& na : c.named_args) {
-                if (na.name == "end") {
-                    end_op  = lower_expr(*na.value, ctx, prog);
-                    has_end = true;
-                }
-            }
-            if (has_end) {
-                ctx.emit(PrintEnd{arg, c.args[0]->type, end_op});
-            } else {
-                ctx.emit(Print{arg, c.args[0]->type});
-            }
-            return ConstUnit{};
-        }
-        // Если есть подсказка — печатаем без \n
-        auto emit_prompt = [&]() {
-            if (!c.args.empty()) {
-                auto prompt = lower_expr(*c.args[0], ctx, prog);
-                ctx.emit(PrintEnd{prompt, TYPE_STRING, ConstString{""}});
-            }
-        };
-
-        if (fname == "input") {
-            emit_prompt();
-            auto dst = ctx.new_temp();
-            ctx.emit(Input{dst});
-            return dst;
-        }
-        if (fname == "input_int") {
-            emit_prompt();
-            auto dst = ctx.new_temp();
-            ctx.emit(InputInt{dst});
-            return dst;
-        }
-        if (fname == "input_float") {
-            emit_prompt();
-            auto dst = ctx.new_temp();
-            ctx.emit(InputFloat{dst});
-            return dst;
-        }
-        if (fname == "to_int") {
-            auto src = lower_expr(*c.args[0], ctx, prog);
-            auto dst = ctx.new_temp();
-            ctx.emit(ToInt{dst, src});
-            return dst;
-        }
-        if (fname == "to_float") {
-            auto src = lower_expr(*c.args[0], ctx, prog);
-            auto dst = ctx.new_temp();
-            ctx.emit(ToFloat{dst, src});
-            return dst;
-        }
-        if (fname == "exit") {
-            auto code = lower_expr(*c.args[0], ctx, prog);
-            ctx.emit(Exit{code});
-            return ConstUnit{};
-        }
-        if (fname == "panic") {
-            auto msg = lower_expr(*c.args[0], ctx, prog);
-            ctx.emit(Panic{msg});
-            return ConstUnit{};
-        }
+        if (auto res = lower_builtin_call(fname, c, ctx, prog))
+            return *res;
 
         std::vector<Operand> args;
         for (auto& a : c.args)
@@ -761,6 +768,79 @@ static const char* fbin_str(FBinOp o) {
     default:return"?";}
 }
 
+static void dump_instr(const Instr& instr, std::ostream& out) {
+    std::visit([&](auto&& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T,Label>)
+            out << v.name << ":\n";
+        else if constexpr (std::is_same_v<T,IBinInstr>)
+            out << operand_to_str(v.dst)<<" = "
+                <<operand_to_str(v.lhs)<<" "<<ibin_str(v.op)<<" "<<operand_to_str(v.rhs);
+        else if constexpr (std::is_same_v<T,FBinInstr>)
+            out << operand_to_str(v.dst)<<" = "
+                <<operand_to_str(v.lhs)<<" "<<fbin_str(v.op)<<" "<<operand_to_str(v.rhs);
+        else if constexpr (std::is_same_v<T,LBinInstr>)
+            out << operand_to_str(v.dst)<<" = "
+                <<operand_to_str(v.lhs)<<(v.op==LBinOp::And?" and ":" or ")<<operand_to_str(v.rhs);
+        else if constexpr (std::is_same_v<T,IUnInstr>)
+            out << operand_to_str(v.dst)<<" = -"<<operand_to_str(v.src);
+        else if constexpr (std::is_same_v<T,FUnInstr>)
+            out << operand_to_str(v.dst)<<" = f-"<<operand_to_str(v.src);
+        else if constexpr (std::is_same_v<T,LUnInstr>)
+            out << operand_to_str(v.dst)<<" = not "<<operand_to_str(v.src);
+        else if constexpr (std::is_same_v<T,Copy>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src);
+        else if constexpr (std::is_same_v<T,SBinInstr>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<"++str"<<operand_to_str(v.rhs);
+        else if constexpr (std::is_same_v<T,StrLen>)
+            out << operand_to_str(v.dst)<<" = strlen("<<operand_to_str(v.src)<<")";
+        else if constexpr (std::is_same_v<T,ArrayLen>)
+            out << operand_to_str(v.dst)<<" = arrlen("<<operand_to_str(v.src)<<")";
+        else if constexpr (std::is_same_v<T,SEqInstr>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<(v.eq?" seq ":" sneq ")<<operand_to_str(v.rhs);
+        else if constexpr (std::is_same_v<T,NewArray>)
+            out << operand_to_str(v.dst)<<" = new_array["<<v.size<<"]";
+        else if constexpr (std::is_same_v<T,ArrayGet>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"]";
+        else if constexpr (std::is_same_v<T,ArraySet>)
+            out << operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"] = "<<operand_to_str(v.val);
+        else if constexpr (std::is_same_v<T,NewStruct>)
+            out << operand_to_str(v.dst)<<" = new_struct "<<v.type_name;
+        else if constexpr (std::is_same_v<T,FieldGet>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.obj)<<".f"<<v.field_idx;
+        else if constexpr (std::is_same_v<T,FieldSet>)
+            out << operand_to_str(v.obj)<<".f"<<v.field_idx<<" = "<<operand_to_str(v.val);
+        else if constexpr (std::is_same_v<T,Call>) {
+            if (v.dst) out << operand_to_str(*v.dst)<<" = ";
+            out << "call "<<v.fname<<"(";
+            for (size_t i=0;i<v.args.size();++i){if(i)out<<",";out<<operand_to_str(v.args[i]);}
+            out << ")";
+        }
+        else if constexpr (std::is_same_v<T,Cast>)
+            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src)
+                <<" as "<<(v.to_type?v.to_type->to_string():"?");
+        else if constexpr (std::is_same_v<T,Jump>)
+            out << "goto "<<v.label;
+        else if constexpr (std::is_same_v<T,JumpFalse>)
+            out << "if_false "<<operand_to_str(v.cond)<<" goto "<<v.label;
+        else if constexpr (std::is_same_v<T,JumpTrue>)
+            out << "if_true "<<operand_to_str(v.cond)<<" goto "<<v.label;
+        else if constexpr (std::is_same_v<T,Return>)
+            out << "return";
+        else if constexpr (std::is_same_v<T,ReturnVal>)
+            out << "return "<<operand_to_str(v.val);
+        else if constexpr (std::is_same_v<T,Print>)
+            out << "print("<<operand_to_str(v.val)<<")";
+        else if constexpr (std::is_same_v<T,Input>)
+            out << operand_to_str(v.dst)<<" = input()";
+        else if constexpr (std::is_same_v<T,Exit>)
+            out << "exit("<<operand_to_str(v.code)<<")";
+        else if constexpr (std::is_same_v<T,Panic>)
+            out << "panic("<<operand_to_str(v.msg)<<")";
+        if constexpr (!std::is_same_v<T,Label>) out << "\n";
+    }, instr);
+}
+
 void dump_ir(const IRProgram& prog, std::ostream& out) {
     for (int i=0;i<static_cast<int>(prog.global_names.size());++i)
         out << "global @" << prog.global_names[i] << " = "
@@ -772,76 +852,7 @@ void dump_ir(const IRProgram& prog, std::ostream& out) {
             << fn.num_locals << " locals):\n";
         for (auto& instr : fn.body) {
             out << "  ";
-            std::visit([&](auto&& v) {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T,Label>)
-                    out << v.name << ":\n";
-                else if constexpr (std::is_same_v<T,IBinInstr>)
-                    out << operand_to_str(v.dst)<<" = "
-                        <<operand_to_str(v.lhs)<<" "<<ibin_str(v.op)<<" "<<operand_to_str(v.rhs);
-                else if constexpr (std::is_same_v<T,FBinInstr>)
-                    out << operand_to_str(v.dst)<<" = "
-                        <<operand_to_str(v.lhs)<<" "<<fbin_str(v.op)<<" "<<operand_to_str(v.rhs);
-                else if constexpr (std::is_same_v<T,LBinInstr>)
-                    out << operand_to_str(v.dst)<<" = "
-                        <<operand_to_str(v.lhs)<<(v.op==LBinOp::And?" and ":" or ")<<operand_to_str(v.rhs);
-                else if constexpr (std::is_same_v<T,IUnInstr>)
-                    out << operand_to_str(v.dst)<<" = -"<<operand_to_str(v.src);
-                else if constexpr (std::is_same_v<T,FUnInstr>)
-                    out << operand_to_str(v.dst)<<" = f-"<<operand_to_str(v.src);
-                else if constexpr (std::is_same_v<T,LUnInstr>)
-                    out << operand_to_str(v.dst)<<" = not "<<operand_to_str(v.src);
-                else if constexpr (std::is_same_v<T,Copy>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src);
-                else if constexpr (std::is_same_v<T,SBinInstr>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<"++str"<<operand_to_str(v.rhs);
-                else if constexpr (std::is_same_v<T,StrLen>)
-                    out << operand_to_str(v.dst)<<" = strlen("<<operand_to_str(v.src)<<")";
-                else if constexpr (std::is_same_v<T,ArrayLen>)
-                    out << operand_to_str(v.dst)<<" = arrlen("<<operand_to_str(v.src)<<")";
-                else if constexpr (std::is_same_v<T,SEqInstr>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<(v.eq?" seq ":" sneq ")<<operand_to_str(v.rhs);
-                else if constexpr (std::is_same_v<T,NewArray>)
-                    out << operand_to_str(v.dst)<<" = new_array["<<v.size<<"]";
-                else if constexpr (std::is_same_v<T,ArrayGet>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"]";
-                else if constexpr (std::is_same_v<T,ArraySet>)
-                    out << operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"] = "<<operand_to_str(v.val);
-                else if constexpr (std::is_same_v<T,NewStruct>)
-                    out << operand_to_str(v.dst)<<" = new_struct "<<v.type_name;
-                else if constexpr (std::is_same_v<T,FieldGet>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.obj)<<".f"<<v.field_idx;
-                else if constexpr (std::is_same_v<T,FieldSet>)
-                    out << operand_to_str(v.obj)<<".f"<<v.field_idx<<" = "<<operand_to_str(v.val);
-                else if constexpr (std::is_same_v<T,Call>) {
-                    if (v.dst) out << operand_to_str(*v.dst)<<" = ";
-                    out << "call "<<v.fname<<"(";
-                    for(size_t i=0;i<v.args.size();++i){if(i)out<<",";out<<operand_to_str(v.args[i]);}
-                    out << ")";
-                }
-                else if constexpr (std::is_same_v<T,Cast>)
-                    out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src)
-                        <<" as "<<(v.to_type?v.to_type->to_string():"?");
-                else if constexpr (std::is_same_v<T,Jump>)
-                    out << "goto "<<v.label;
-                else if constexpr (std::is_same_v<T,JumpFalse>)
-                    out << "if_false "<<operand_to_str(v.cond)<<" goto "<<v.label;
-                else if constexpr (std::is_same_v<T,JumpTrue>)
-                    out << "if_true "<<operand_to_str(v.cond)<<" goto "<<v.label;
-                else if constexpr (std::is_same_v<T,Return>)
-                    out << "return";
-                else if constexpr (std::is_same_v<T,ReturnVal>)
-                    out << "return "<<operand_to_str(v.val);
-                else if constexpr (std::is_same_v<T,Print>)
-                    out << "print("<<operand_to_str(v.val)<<")";
-                else if constexpr (std::is_same_v<T,Input>)
-                    out << operand_to_str(v.dst)<<" = input()";
-                else if constexpr (std::is_same_v<T,Exit>)
-                    out << "exit("<<operand_to_str(v.code)<<")";
-                else if constexpr (std::is_same_v<T,Panic>)
-                    out << "panic("<<operand_to_str(v.msg)<<")";
-                if constexpr (!std::is_same_v<T,Label>) out << "\n";
-            }, instr);
+            dump_instr(instr, out);
         }
         out << "\n";
     }
