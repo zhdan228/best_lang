@@ -81,11 +81,19 @@ struct Token {
     uint32_t line = 1;
     uint32_t col  = 1;
 
-    // Вспомогательные методы для чтения нужного поля по суффиксу
-    int64_t  as_int()   const { return num.i64; }
-    uint64_t as_uint()  const { return num.u64; }
-    // float32 хранится в num.f32, float64 — в num.f64
-    double   as_float() const { return (suffix == "f32") ? (double)num.f32 : num.f64; }
+    int64_t as_int() const {
+        if (suffix == "i8")  return num.i8;
+        if (suffix == "i16") return num.i16;
+        if (suffix == "i32") return num.i32;
+        return num.i64;
+    }
+    uint64_t as_uint() const {
+        if (suffix == "u8")  return num.u8;
+        if (suffix == "u16") return num.u16;
+        if (suffix == "u32") return num.u32;
+        return num.u64;
+    }
+    double as_float() const { return (suffix == "f32") ? (double)num.f32 : num.f64; }
 };
 
 // Ошибка лексера — всегда фатальная (одна ошибка → остановка)

@@ -1,0 +1,36 @@
+fun insertion_sort(arr: [int32; 8]): void {
+    for var i: int32 = 1; i < 8; i = i + 1 {
+        var key: int32 = arr[i];
+        var j: int32 = i - 1;
+        while j >= 0 {
+            if arr[j] > key {
+                arr[j + 1] = arr[j];
+                j = j - 1;
+            } else {
+                break;
+            }
+        }
+        arr[j + 1] = key;
+    }
+}
+
+fun print_arr(arr: [int32; 8]): void {
+    for i in 0..8 {
+        print(arr[i], end=" ");
+    }
+    print("");
+}
+
+fun main(): int32 {
+    var nums: [int32; 8] = [38, 27, 43, 3, 9, 82, 10, 1];
+
+    print("до сортировки:");
+    print_arr(nums);
+
+    insertion_sort(nums);
+
+    print("после сортировки:");
+    print_arr(nums);
+
+    return 0;
+}
