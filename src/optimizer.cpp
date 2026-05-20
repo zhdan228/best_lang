@@ -2,16 +2,6 @@
 #include <unordered_map>
 #include <optional>
 
-/*
- * Оптимизатор IR — свёртка констант (constant folding).
- *
- * Для каждой функции отслеживаем таблицу known: temp_id → константа.
- * Если оба операнда инструкции — известные константы, вычисляем результат
- * на этапе компиляции и заменяем инструкцию на Copy(dst, константа).
- *
- * Пример: t0 = 2 + 3  →  t0 = 5  (лишнее IADD не попадает в байткод)
- */
-
 namespace IR {
 
 static std::optional<int64_t> as_int(const Operand& o) {
@@ -28,12 +18,10 @@ static std::optional<bool> as_bool(const Operand& o) {
 }
 
 static bool is_const(const Operand& o) {
-    return std::holds_alternative<ConstInt>(o)    ||
-           std::holds_alternative<ConstUInt>(o)   ||
-           std::holds_alternative<ConstFloat>(o)  ||
-           std::holds_alternative<ConstBool>(o)   ||
-           std::holds_alternative<ConstString>(o) ||
-           std::holds_alternative<ConstUnit>(o);
+    return std::get_if<ConstInt>(&o)    || std::get_if<ConstUInt>(&o)  ||
+           std::get_if<ConstFloat>(&o)  || std::get_if<ConstBool>(&o)  ||
+           std::get_if<ConstChar>(&o)   ||
+           std::get_if<ConstString>(&o) || std::get_if<ConstUnit>(&o);
 }
 
 static Operand resolve(const Operand& o, const std::unordered_map<int,Operand>& known) {
@@ -82,80 +70,61 @@ static std::optional<Operand> fold_fbinop(FBinOp op, double l, double r) {
     }
 }
 
+static void fold_pass1(IRFunction& fn, std::unordered_map<int,Operand>& known) {
+    for (auto& instr : fn.body) {
+        if (auto* v = std::get_if<IBinInstr>(&instr)) {
+            v->lhs = resolve(v->lhs, known); v->rhs = resolve(v->rhs, known);
+            if (auto li = as_int(v->lhs), ri = as_int(v->rhs); li && ri)
+                if (auto res = fold_ibinop(v->op, *li, *ri)) record_fold(v->dst, *res, known);
+        } else if (auto* v = std::get_if<FBinInstr>(&instr)) {
+            v->lhs = resolve(v->lhs, known); v->rhs = resolve(v->rhs, known);
+            if (auto lf = as_float(v->lhs), rf = as_float(v->rhs); lf && rf)
+                if (auto res = fold_fbinop(v->op, *lf, *rf)) record_fold(v->dst, *res, known);
+        } else if (auto* v = std::get_if<LBinInstr>(&instr)) {
+            v->lhs = resolve(v->lhs, known); v->rhs = resolve(v->rhs, known);
+            if (auto lb = as_bool(v->lhs), rb = as_bool(v->rhs); lb && rb)
+                record_fold(v->dst, ConstBool{v->op==LBinOp::And ? (*lb&&*rb) : (*lb||*rb)}, known);
+        } else if (auto* v = std::get_if<LUnInstr>(&instr)) {
+            v->src = resolve(v->src, known);
+            if (auto b = as_bool(v->src)) record_fold(v->dst, ConstBool{!*b}, known);
+        } else if (auto* v = std::get_if<IUnInstr>(&instr)) {
+            v->src = resolve(v->src, known);
+            if (auto i = as_int(v->src); i && v->op == IUnOp::Neg)
+                record_fold(v->dst, ConstInt{-*i}, known);
+        } else if (auto* v = std::get_if<Copy>(&instr)) {
+            v->src = resolve(v->src, known);
+            if (is_const(v->src)) record_fold(v->dst, v->src, known);
+        } else if (auto* v = std::get_if<JumpFalse>(&instr)) {
+            v->cond = resolve(v->cond, known);
+        } else if (auto* v = std::get_if<JumpTrue>(&instr)) {
+            v->cond = resolve(v->cond, known);
+        } else if (auto* v = std::get_if<ReturnVal>(&instr)) {
+            v->val = resolve(v->val, known);
+        }
+    }
+}
+
+static void fold_pass2(IRFunction& fn, const std::unordered_map<int,Operand>& known) {
+    for (auto& instr : fn.body) {
+        const Operand* dst = nullptr;
+        if (auto* v = std::get_if<IBinInstr>(&instr)) dst = &v->dst;
+        else if (auto* v = std::get_if<FBinInstr>(&instr)) dst = &v->dst;
+        else if (auto* v = std::get_if<LBinInstr>(&instr)) dst = &v->dst;
+        else if (auto* v = std::get_if<IUnInstr>(&instr))  dst = &v->dst;
+        else if (auto* v = std::get_if<FUnInstr>(&instr))  dst = &v->dst;
+        else if (auto* v = std::get_if<LUnInstr>(&instr))  dst = &v->dst;
+        if (!dst) continue;
+        if (auto* tv = std::get_if<TempVar>(dst)) {
+            auto it = known.find(tv->id);
+            if (it != known.end()) instr = Copy{*dst, it->second};
+        }
+    }
+}
+
 static void fold_function(IRFunction& fn) {
     std::unordered_map<int,Operand> known;
-
-    for (auto& instr : fn.body) {
-        std::visit([&](auto& v) {
-            using T = std::decay_t<decltype(v)>;
-
-            if constexpr (std::is_same_v<T,IBinInstr>) {
-                v.lhs = resolve(v.lhs, known);
-                v.rhs = resolve(v.rhs, known);
-                auto li = as_int(v.lhs), ri = as_int(v.rhs);
-                if (li && ri)
-                    if (auto res = fold_ibinop(v.op, *li, *ri))
-                        record_fold(v.dst, *res, known);
-
-            } else if constexpr (std::is_same_v<T,FBinInstr>) {
-                v.lhs = resolve(v.lhs, known);
-                v.rhs = resolve(v.rhs, known);
-                auto lf = as_float(v.lhs), rf = as_float(v.rhs);
-                if (lf && rf)
-                    if (auto res = fold_fbinop(v.op, *lf, *rf))
-                        record_fold(v.dst, *res, known);
-
-            } else if constexpr (std::is_same_v<T,LBinInstr>) {
-                v.lhs = resolve(v.lhs, known);
-                v.rhs = resolve(v.rhs, known);
-                auto lb = as_bool(v.lhs), rb = as_bool(v.rhs);
-                if (lb && rb) {
-                    bool res = (v.op == LBinOp::And) ? (*lb && *rb) : (*lb || *rb);
-                    record_fold(v.dst, ConstBool{res}, known);
-                }
-
-            } else if constexpr (std::is_same_v<T,LUnInstr>) {
-                v.src = resolve(v.src, known);
-                if (auto b = as_bool(v.src))
-                    record_fold(v.dst, ConstBool{!*b}, known);
-
-            } else if constexpr (std::is_same_v<T,IUnInstr>) {
-                v.src = resolve(v.src, known);
-                if (auto i = as_int(v.src); i && v.op == IUnOp::Neg)
-                    record_fold(v.dst, ConstInt{-*i}, known);
-
-            } else if constexpr (std::is_same_v<T,Copy>) {
-                v.src = resolve(v.src, known);
-                if (is_const(v.src))
-                    record_fold(v.dst, v.src, known);
-
-            } else if constexpr (std::is_same_v<T,JumpFalse> ||
-                                  std::is_same_v<T,JumpTrue>) {
-                v.cond = resolve(v.cond, known);
-
-            } else if constexpr (std::is_same_v<T,ReturnVal>) {
-                v.val = resolve(v.val, known);
-            }
-        }, instr);
-    }
-
-    for (auto& instr : fn.body) {
-        std::visit([&](auto& v) {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T,IBinInstr> ||
-                          std::is_same_v<T,FBinInstr> ||
-                          std::is_same_v<T,LBinInstr> ||
-                          std::is_same_v<T,IUnInstr>  ||
-                          std::is_same_v<T,FUnInstr>  ||
-                          std::is_same_v<T,LUnInstr>) {
-                if (auto* tv = std::get_if<TempVar>(&v.dst)) {
-                    auto it = known.find(tv->id);
-                    if (it != known.end())
-                        instr = Copy{v.dst, it->second};
-                }
-            }
-        }, instr);
-    }
+    fold_pass1(fn, known);
+    fold_pass2(fn, known);
 }
 
 void optimize(IRProgram& prog) {
