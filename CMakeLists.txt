@@ -4,6 +4,8 @@ project(BestLang CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 if(MSVC)
     add_compile_options(/W4 /utf-8)
 else()
@@ -42,4 +44,11 @@ add_custom_target(debug
     COMMAND myc ${CMAKE_SOURCE_DIR}/examples/hello.bl --dump-ir
     DEPENDS myc
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+add_custom_target(clean_all
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+        ${CMAKE_BINARY_DIR}/myc
+        ${CMAKE_BINARY_DIR}/blvm
+    COMMENT "Removing compiled executables (use 'cmake --build . --target clean' to also remove objects)"
 )

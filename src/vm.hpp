@@ -12,7 +12,7 @@ struct ArrayObj;
 struct StructObj;
 
 struct Value {
-    enum class Kind { Int, UInt, Float, Bool, Str, Array, Struct, Unit };
+    enum class Kind { Int, UInt, Float, Bool, Char, Str, Array, Struct, Unit };
     Kind kind = Kind::Unit;
 
     int64_t  i = 0;

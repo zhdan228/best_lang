@@ -27,12 +27,13 @@ struct ConstInt   { int64_t  v; };
 struct ConstUInt  { uint64_t v; };
 struct ConstFloat { double   v; };
 struct ConstBool  { bool     v; };
+struct ConstChar  { char v; };
 struct ConstString{ std::string v; };
 struct ConstUnit  {}; // значение void/null
 
 using Operand = std::variant<
     TempVar, LocalVar, GlobalVar,
-    ConstInt, ConstUInt, ConstFloat, ConstBool, ConstString, ConstUnit
+    ConstInt, ConstUInt, ConstFloat, ConstBool, ConstChar, ConstString, ConstUnit
 >;
 
 // Перечисления операций
@@ -46,12 +47,16 @@ enum class LUnOp  { Not };
 // IR инструкции
 struct Label    { std::string name; };
 
-struct IBinInstr { Operand dst; IBinOp op; Operand lhs, rhs; };
+struct IBinInstr { Operand dst; IBinOp op; Operand lhs, rhs; uint8_t bits = 64; bool is_unsigned = false; };
 struct FBinInstr { Operand dst; FBinOp op; Operand lhs, rhs; };
 struct LBinInstr { Operand dst; LBinOp op; Operand lhs, rhs; };
-struct IUnInstr  { Operand dst; IUnOp  op; Operand src; };
+struct IUnInstr  { Operand dst; IUnOp  op; Operand src;      uint8_t bits = 64; bool is_unsigned = false; };
 struct FUnInstr  { Operand dst; FUnOp  op; Operand src; };
 struct LUnInstr  { Operand dst; LUnOp  op; Operand src; };
+
+// Лексикографическое сравнение строк (< <= > >=)
+enum class SCmpOp { Lt, Le, Gt, Ge };
+struct SCmpInstr { Operand dst; SCmpOp op; Operand lhs, rhs; };
 
 struct Copy { Operand dst; Operand src; }; // dst = src
 
@@ -77,6 +82,7 @@ struct Call {
     std::optional<Operand> dst; // нет значения для void-вызовов
     std::string fname;          // полностью квалифицированное имя
     std::vector<Operand> args;
+    bool is_method = false;     // первый аргумент — self, не копировать
 };
 
 // Приведение числовых типов
@@ -109,7 +115,7 @@ using Instr = std::variant<
     IBinInstr, FBinInstr, LBinInstr,
     IUnInstr, FUnInstr, LUnInstr,
     Copy,
-    SBinInstr, StrLen, ArrayLen, SEqInstr,
+    SBinInstr, StrLen, ArrayLen, SEqInstr, SCmpInstr,
     NewArray, NewDynArray, ArrayGet, ArraySet, ArrayPush, ArrayPop,
     NewStruct, FieldGet, FieldSet,
     Call, Cast,
