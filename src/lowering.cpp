@@ -127,6 +127,17 @@ static std::optional<Operand> lower_builtin_call(
         ctx.emit(Panic{lower_expr(*c.args[0], ctx, prog)});
         return ConstUnit{};
     }
+    if (fname == "assert") {
+        auto cond = lower_expr(*c.args[0], ctx, prog);
+        auto ok_lbl = ctx.new_label("assert_ok");
+        ctx.emit(JumpTrue{cond, ok_lbl});
+        Operand msg = (c.args.size() > 1)
+            ? lower_expr(*c.args[1], ctx, prog)
+            : Operand{ConstString{"assertion failed"}};
+        ctx.emit(Panic{msg});
+        ctx.emit(Label{ok_lbl});
+        return ConstUnit{};
+    }
     return std::nullopt;
 }
 
@@ -166,455 +177,433 @@ static FBinOp binop_to_float(BinOpKind op) {
     }
 }
 
-static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
-    switch (e.kind) {
+static Operand lower_int_lit(const Expr& e) {
+    auto& il = static_cast<const IntLitExpr&>(e);
+    if (il.suffix.size() && il.suffix[0] == 'u')
+        return ConstUInt{(uint64_t)il.value};
+    return ConstInt{il.value};
+}
 
-    case Expr::Kind::IntLit: {
-        auto& il = static_cast<const IntLitExpr&>(e);
-        // Беззнаковый суффикс → ConstUInt
-        if (il.suffix.size() && il.suffix[0]=='u')
-            return ConstUInt{(uint64_t)il.value};
-        return ConstInt{il.value};
+static Operand lower_ident(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& id = static_cast<const IdentExpr&>(e);
+    if (auto lop = lookup_local(ctx, id.name))      return *lop;
+    if (auto gs  = lookup_global_slot(prog, id.name)) return GlobalVar{*gs, id.name};
+    throw std::runtime_error("undefined ident in lowering: " + id.name);
+}
+
+static Operand lower_namespace_access(const Expr& e, IRProgram& prog) {
+    auto& na = static_cast<const NamespaceAccessExpr&>(e);
+    std::string full = na.ns_name + "::" + na.member;
+    if (auto gs = lookup_global_slot(prog, full)) return GlobalVar{*gs, full};
+    throw std::runtime_error("undefined namespace var: " + full);
+}
+
+static Operand lower_binop(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& b   = static_cast<const BinOpExpr&>(e);
+    auto  lhs = lower_expr(*b.lhs, ctx, prog);
+    auto  rhs = lower_expr(*b.rhs, ctx, prog);
+    auto  dst = ctx.new_temp();
+
+    if (b.op == BinOpKind::StrConcat) {
+        ctx.emit(SBinInstr{dst, lhs, rhs});
+        return dst;
     }
-    case Expr::Kind::FloatLit:
-        return ConstFloat{static_cast<const FloatLitExpr&>(e).value};
-    case Expr::Kind::BoolLit:
-        return ConstBool{static_cast<const BoolLitExpr&>(e).value};
-    case Expr::Kind::StringLit:
-        return ConstString{static_cast<const StringLitExpr&>(e).value};
-
-    case Expr::Kind::Ident: {
-        auto& id = static_cast<const IdentExpr&>(e);
-        // локальная переменная?
-        if (auto lop = lookup_local(ctx, id.name)) return *lop;
-        // глобальная переменная?
-        if (auto gs = lookup_global_slot(prog, id.name))
-            return GlobalVar{*gs, id.name};
-        throw std::runtime_error("undefined ident in lowering: " + id.name);
+    if (b.lhs->type && b.lhs->type->is_string()) {
+        if (b.op == BinOpKind::Eq || b.op == BinOpKind::NEq) {
+            ctx.emit(SEqInstr{dst, lhs, rhs, b.op == BinOpKind::Eq});
+        } else {
+            SCmpOp sop = (b.op == BinOpKind::Lt) ? SCmpOp::Lt :
+                         (b.op == BinOpKind::Le) ? SCmpOp::Le :
+                         (b.op == BinOpKind::Gt) ? SCmpOp::Gt : SCmpOp::Ge;
+            ctx.emit(SCmpInstr{dst, sop, lhs, rhs});
+        }
+        return dst;
     }
 
-    case Expr::Kind::NamespaceAccess: {
-        auto& na = static_cast<const NamespaceAccessExpr&>(e);
-        std::string full = na.ns_name + "::" + na.member;
-        if (auto gs = lookup_global_slot(prog, full))
-            return GlobalVar{*gs, full};
-        throw std::runtime_error("undefined namespace var: " + full);
-    }
+    bool fp = is_float_type(b.lhs->type);
+    bool lg = is_bool_type(b.lhs->type) || b.op == BinOpKind::And || b.op == BinOpKind::Or;
 
-    case Expr::Kind::BinOp: {
-        auto& b = static_cast<const BinOpExpr&>(e);
-        auto lhs = lower_expr(*b.lhs, ctx, prog);
-        auto rhs = lower_expr(*b.rhs, ctx, prog);
+    if (lg) {
+        ctx.emit(LBinInstr{dst, (b.op == BinOpKind::And) ? LBinOp::And : LBinOp::Or, lhs, rhs});
+    } else if (fp) {
+        ctx.emit(FBinInstr{dst, binop_to_float(b.op), lhs, rhs});
+    } else {
+        uint8_t bits = 64; bool is_u = false;
+        if (b.lhs->type) {
+            int b_bits = b.lhs->type->int_bits();
+            if (b_bits > 0) bits = (uint8_t)b_bits;
+            is_u = b.lhs->type->is_unsigned_int();
+        }
+        ctx.emit(IBinInstr{dst, binop_to_int(b.op), lhs, rhs, bits, is_u});
+    }
+    return dst;
+}
+
+static Operand lower_unary(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& u   = static_cast<const UnaryOpExpr&>(e);
+    auto  src = lower_expr(*u.operand, ctx, prog);
+    auto  dst = ctx.new_temp();
+    if (u.op == UnaryOpKind::Neg) {
+        if (is_float_type(u.operand->type)) {
+            ctx.emit(FUnInstr{dst, FUnOp::Neg, src});
+        } else {
+            uint8_t bits = 64; bool is_u = false;
+            if (u.operand->type) {
+                int b = u.operand->type->int_bits();
+                if (b > 0) bits = (uint8_t)b;
+                is_u = u.operand->type->is_unsigned_int();
+            }
+            ctx.emit(IUnInstr{dst, IUnOp::Neg, src, bits, is_u});
+        }
+    } else {
+        ctx.emit(LUnInstr{dst, LUnOp::Not, src});
+    }
+    return dst;
+}
+
+static Operand lower_cast(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& c   = static_cast<const CastExpr&>(e);
+    auto  src = lower_expr(*c.operand, ctx, prog);
+    auto  dst = ctx.new_temp();
+    ctx.emit(Cast{dst, src, c.operand->type, c.target});
+    return dst;
+}
+
+static Operand emit_call_result(const Expr& e, const std::string& fname,
+                                std::vector<Operand> args, FnCtx& ctx,
+                                bool is_method = false) {
+    bool is_void = e.type && e.type->is_void();
+    if (is_void) {
+        ctx.emit(Call{std::nullopt, fname, std::move(args), is_method});
+        return ConstUnit{};
+    }
+    auto dst = ctx.new_temp();
+    ctx.emit(Call{dst, fname, std::move(args), is_method});
+    return dst;
+}
+
+static std::optional<Operand> lower_method_call(const Expr& e, const CallExpr& c,
+                                                 FnCtx& ctx, IRProgram& prog) {
+    if (c.callee->kind != Expr::Kind::Field) return std::nullopt;
+
+    auto& fe  = static_cast<const FieldExpr&>(*c.callee);
+    auto  obj = lower_expr(*fe.object, ctx, prog);
+
+    if (fe.object->type && fe.object->type->is_string() && fe.field_name == "len") {
         auto dst = ctx.new_temp();
+        ctx.emit(StrLen{dst, obj});
+        return dst;
+    }
 
-        // Строковые операции
-        if (b.op == BinOpKind::StrConcat) {
-            ctx.emit(SBinInstr{dst, lhs, rhs});
+    bool is_array = fe.object->type &&
+        (fe.object->type->is_dynarray() || fe.object->type->is_array());
+    if (is_array) {
+        if (fe.field_name == "push") {
+            ctx.emit(ArrayPush{obj, lower_expr(*c.args[0], ctx, prog)});
+            return ConstUnit{};
+        }
+        if (fe.field_name == "pop") {
+            auto dst = ctx.new_temp();
+            ctx.emit(ArrayPop{dst, obj});
             return dst;
         }
-        if (b.op == BinOpKind::Eq || b.op == BinOpKind::NEq) {
-            if (b.lhs->type && b.lhs->type->is_string()) {
-                ctx.emit(SEqInstr{dst, lhs, rhs, b.op == BinOpKind::Eq});
-                return dst;
-            }
+        if (fe.field_name == "len") {
+            auto dst = ctx.new_temp();
+            ctx.emit(ArrayLen{dst, obj});
+            return dst;
         }
-
-        bool fp = is_float_type(b.lhs->type);
-        bool lg = is_bool_type(b.lhs->type) ||
-                  b.op == BinOpKind::And || b.op == BinOpKind::Or;
-
-        if (lg) {
-            LBinOp op = (b.op == BinOpKind::And) ? LBinOp::And : LBinOp::Or;
-            ctx.emit(LBinInstr{dst, op, lhs, rhs});
-        } else if (fp) {
-            ctx.emit(FBinInstr{dst, binop_to_float(b.op), lhs, rhs});
-        } else {
-            ctx.emit(IBinInstr{dst, binop_to_int(b.op), lhs, rhs});
+        if (fe.field_name == "get") {
+            auto dst = ctx.new_temp();
+            ctx.emit(ArrayGet{dst, obj, lower_expr(*c.args[0], ctx, prog)});
+            return dst;
         }
-        return dst;
     }
 
-    case Expr::Kind::UnaryOp: {
-        auto& u = static_cast<const UnaryOpExpr&>(e);
-        auto src = lower_expr(*u.operand, ctx, prog);
-        auto dst = ctx.new_temp();
-        if (u.op == UnaryOpKind::Neg) {
-            if (is_float_type(u.operand->type))
-                ctx.emit(FUnInstr{dst, FUnOp::Neg, src});
-            else
-                ctx.emit(IUnInstr{dst, IUnOp::Neg, src});
-        } else {
-            ctx.emit(LUnInstr{dst, LUnOp::Not, src});
-        }
-        return dst;
-    }
-
-    case Expr::Kind::Cast: {
-        auto& c = static_cast<const CastExpr&>(e);
-        auto src = lower_expr(*c.operand, ctx, prog);
-        auto dst = ctx.new_temp();
-        ctx.emit(Cast{dst, src, c.operand->type, c.target});
-        return dst;
-    }
-
-    case Expr::Kind::Call: {
-        auto& c = static_cast<const CallExpr&>(e);
-        std::string fname;
-
-        // Вызов метода на массиве или структуре 
-        if (c.callee->kind == Expr::Kind::Field) {
-            auto& fe = static_cast<const FieldExpr&>(*c.callee);
-            auto obj = lower_expr(*fe.object, ctx, prog);
-            // Методы строки
-            if (fe.object->type && fe.object->type->is_string()) {
-                if (fe.field_name == "len") {
-                    auto dst = ctx.new_temp();
-                    ctx.emit(StrLen{dst, obj});
-                    return dst;
-                }
-            }
-            // Сначала проверяем тип объекта
-            bool obj_is_dynarray = fe.object->type &&
-                (fe.object->type->is_dynarray() ||
-                 (fe.object->type->is_array()));
-            // Встроенные методы динамического массива
-            if (obj_is_dynarray) {
-                if (fe.field_name == "push") {
-                    auto val = lower_expr(*c.args[0], ctx, prog);
-                    ctx.emit(ArrayPush{obj, val});
-                    return ConstUnit{};
-                }
-                if (fe.field_name == "pop") {
-                    auto dst = ctx.new_temp();
-                    ctx.emit(ArrayPop{dst, obj});
-                    return dst;
-                }
-                if (fe.field_name == "len") {
-                    auto dst = ctx.new_temp();
-                    ctx.emit(ArrayLen{dst, obj});
-                    return dst;
-                }
-                if (fe.field_name == "get") {
-                    auto idx = lower_expr(*c.args[0], ctx, prog);
-                    auto dst = ctx.new_temp();
-                    ctx.emit(ArrayGet{dst, obj, idx});
-                    return dst;
-                }
-            }
-            // Вызов метода структуры: TypeName::method(self, ...)
-            if (fe.object->type && fe.object->type->is_struct()) {
-                std::string qualified = fe.object->type->struct_name + "::" + fe.field_name;
-                std::vector<Operand> args;
-                args.push_back(obj); 
-                for (auto& a : c.args)
-                    args.push_back(lower_expr(*a, ctx, prog));
-                bool is_void = e.type && e.type->is_void();
-                if (is_void) {
-                    ctx.emit(Call{std::nullopt, qualified, std::move(args)});
-                    return ConstUnit{};
-                } else {
-                    auto dst = ctx.new_temp();
-                    ctx.emit(Call{dst, qualified, std::move(args)});
-                    return dst;
-                }
-            }
-        }
-
-        if (c.callee->kind == Expr::Kind::Ident)
-            fname = static_cast<const IdentExpr&>(*c.callee).name;
-        else if (c.callee->kind == Expr::Kind::NamespaceAccess) {
-            auto& na = static_cast<const NamespaceAccessExpr&>(*c.callee);
-            fname = na.ns_name + "::" + na.member;
-        }
-
-        // Встроенные функции
-        if (auto res = lower_builtin_call(fname, c, ctx, prog))
-            return *res;
-
+    if (fe.object->type && fe.object->type->is_struct()) {
+        std::string qualified = sname(*fe.object->type) + "::" + fe.field_name;
         std::vector<Operand> args;
+        args.push_back(obj);
         for (auto& a : c.args)
             args.push_back(lower_expr(*a, ctx, prog));
-
-        bool is_void = e.type && e.type->is_void();
-        if (is_void) {
-            ctx.emit(Call{std::nullopt, fname, args});
-            return ConstUnit{};
-        } else {
-            auto dst = ctx.new_temp();
-            ctx.emit(Call{dst, fname, args});
-            return dst;
-        }
+        return emit_call_result(e, qualified, std::move(args), ctx, /*is_method=*/true);
     }
 
+    return std::nullopt;
+}
+
+static Operand lower_call(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& c = static_cast<const CallExpr&>(e);
+
+    if (auto res = lower_method_call(e, c, ctx, prog))
+        return *res;
+
+    std::string fname;
+    switch (c.callee->kind) {
+    case Expr::Kind::Ident:
+        fname = static_cast<const IdentExpr&>(*c.callee).name;
+        break;
+    case Expr::Kind::NamespaceAccess: {
+        auto& na = static_cast<const NamespaceAccessExpr&>(*c.callee);
+        fname = na.ns_name + "::" + na.member;
+        break;
+    }
+    default: break;
+    }
+
+    if (auto res = lower_builtin_call(fname, c, ctx, prog))
+        return *res;
+
+    std::vector<Operand> args;
+    for (auto& a : c.args)
+        args.push_back(lower_expr(*a, ctx, prog));
+    return emit_call_result(e, fname, std::move(args), ctx);
+}
+
+static Operand lower_array_lit(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& al    = static_cast<const ArrayLitExpr&>(e);
+    bool  is_dyn = e.type && e.type->is_dynarray();
+    TypePtr elem = (e.type && (e.type->is_array() || e.type->is_dynarray()))
+                   ? type_elem(*e.type) : TYPE_INT32;
+    auto dst = ctx.new_temp();
+    if (is_dyn) {
+        ctx.emit(NewDynArray{dst, elem});
+        for (auto& el : al.elements) {
+            ctx.emit(ArrayPush{dst, lower_expr(*el, ctx, prog)});
+        }
+    } else {
+        ctx.emit(NewArray{dst, (int64_t)al.elements.size(), elem});
+        for (int i = 0; i < static_cast<int>(al.elements.size()); ++i)
+            ctx.emit(ArraySet{dst, ConstInt{i}, lower_expr(*al.elements[i], ctx, prog)});
+    }
+    return dst;
+}
+
+static Operand lower_struct_lit(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& sl     = static_cast<const StructLitExpr&>(e);
+    auto  dst    = ctx.new_temp();
+    std::string st_name = (e.type && e.type->is_struct()) ? sname(*e.type) : sl.type_name;
+    ctx.emit(NewStruct{dst, st_name, static_cast<int>(sl.fields.size())});
+    for (int i = 0; i < static_cast<int>(sl.fields.size()); ++i)
+        ctx.emit(FieldSet{dst, i, lower_expr(*sl.fields[i].value, ctx, prog)});
+    return dst;
+}
+
+static Operand lower_tuple_lit(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    auto& tl  = static_cast<const TupleLitExpr&>(e);
+    auto  dst = ctx.new_temp();
+    ctx.emit(NewStruct{dst, "__tuple__", static_cast<int>(tl.elements.size())});
+    for (int i = 0; i < static_cast<int>(tl.elements.size()); ++i)
+        ctx.emit(FieldSet{dst, i, lower_expr(*tl.elements[i], ctx, prog)});
+    return dst;
+}
+
+static Operand lower_expr(const Expr& e, FnCtx& ctx, IRProgram& prog) {
+    switch (e.kind) {
+    case Expr::Kind::IntLit:          return lower_int_lit(e);
+    case Expr::Kind::FloatLit:        return ConstFloat{static_cast<const FloatLitExpr&>(e).value};
+    case Expr::Kind::BoolLit:         return ConstBool{static_cast<const BoolLitExpr&>(e).value};
+    case Expr::Kind::CharLit:         return ConstChar{static_cast<const CharLitExpr&>(e).value};
+    case Expr::Kind::StringLit:       return ConstString{static_cast<const StringLitExpr&>(e).value};
+    case Expr::Kind::NullLit:         return ConstUnit{};
+    case Expr::Kind::Ident:           return lower_ident(e, ctx, prog);
+    case Expr::Kind::NamespaceAccess: return lower_namespace_access(e, prog);
+    case Expr::Kind::BinOp:           return lower_binop(e, ctx, prog);
+    case Expr::Kind::UnaryOp:         return lower_unary(e, ctx, prog);
+    case Expr::Kind::Cast:            return lower_cast(e, ctx, prog);
+    case Expr::Kind::Call:            return lower_call(e, ctx, prog);
     case Expr::Kind::Index: {
         auto& ix = static_cast<const IndexExpr&>(e);
-        auto arr = lower_expr(*ix.arr, ctx, prog);
-        auto idx = lower_expr(*ix.idx, ctx, prog);
-        auto dst = ctx.new_temp();
-        ctx.emit(ArrayGet{dst, arr, idx});
+        auto  dst = ctx.new_temp();
+        ctx.emit(ArrayGet{dst, lower_expr(*ix.arr, ctx, prog), lower_expr(*ix.idx, ctx, prog)});
         return dst;
     }
-
     case Expr::Kind::Field: {
-        auto& fe = static_cast<const FieldExpr&>(e);
-        auto obj = lower_expr(*fe.object, ctx, prog);
-        auto dst = ctx.new_temp();
-        ctx.emit(FieldGet{dst, obj, fe.field_idx});
+        auto& fe  = static_cast<const FieldExpr&>(e);
+        auto  dst = ctx.new_temp();
+        ctx.emit(FieldGet{dst, lower_expr(*fe.object, ctx, prog), fe.field_idx});
         return dst;
     }
-
-    case Expr::Kind::NullLit:
-        return IR::ConstUnit{};
-
-    case Expr::Kind::TupleLit: {
-        auto& tl = static_cast<const TupleLitExpr&>(e);
-        auto dst = ctx.new_temp();
-        ctx.emit(NewStruct{dst, "__tuple__", static_cast<int>(tl.elements.size())});
-        for (int i = 0; i < static_cast<int>(tl.elements.size()); ++i) {
-            auto val = lower_expr(*tl.elements[i], ctx, prog);
-            ctx.emit(FieldSet{dst, i, val});
-        }
-        return dst;
-    }
-
+    case Expr::Kind::TupleLit:        return lower_tuple_lit(e, ctx, prog);
     case Expr::Kind::TupleIndex: {
-        auto& ti = static_cast<const TupleIndexExpr&>(e);
-        auto obj = lower_expr(*ti.object, ctx, prog);
-        auto dst = ctx.new_temp();
-        ctx.emit(FieldGet{dst, obj, ti.index});
+        auto& ti  = static_cast<const TupleIndexExpr&>(e);
+        auto  dst = ctx.new_temp();
+        ctx.emit(FieldGet{dst, lower_expr(*ti.object, ctx, prog), ti.index});
         return dst;
     }
-
-    case Expr::Kind::ArrayLit: {
-        auto& al = static_cast<const ArrayLitExpr&>(e);
-        bool is_dyn = e.type && e.type->is_dynarray();
-        TypePtr elem = (e.type && (e.type->is_array()||e.type->is_dynarray()))
-                       ? e.type->elem_type : TYPE_INT32;
-        auto dst = ctx.new_temp();
-        if (is_dyn) {
-            ctx.emit(NewDynArray{dst, elem});
-            for (auto& el : al.elements) {
-                auto val = lower_expr(*el, ctx, prog);
-                ctx.emit(ArrayPush{dst, val});
-            }
-        } else {
-            ctx.emit(NewArray{dst, (int64_t)al.elements.size(), elem});
-            for (int i = 0; i < static_cast<int>(al.elements.size()); ++i) {
-                auto val = lower_expr(*al.elements[i], ctx, prog);
-                ctx.emit(ArraySet{dst, ConstInt{i}, val});
-            }
-        }
-        return dst;
-    }
-
-    case Expr::Kind::StructLit: {
-        auto& sl = static_cast<const StructLitExpr&>(e);
-        auto dst = ctx.new_temp();
-        ctx.emit(NewStruct{dst, sl.type_name, static_cast<int>(sl.fields.size())});
-        for (int i = 0; i < static_cast<int>(sl.fields.size()); ++i) {
-            auto val = lower_expr(*sl.fields[i].value, ctx, prog);
-            ctx.emit(FieldSet{dst, i, val});
-        }
-        return dst;
-    }
-
+    case Expr::Kind::ArrayLit:        return lower_array_lit(e, ctx, prog);
+    case Expr::Kind::StructLit:       return lower_struct_lit(e, ctx, prog);
     default:
         throw std::runtime_error("unhandled expr kind in lowering");
     }
 }
 
 
-static void lower_assign(const LValue& lv,
-                          Operand val,
-                          FnCtx& ctx,
-                          IRProgram& prog) {
+static Operand resolve_lvalue_base(const LValue& lv, FnCtx& ctx, IRProgram& prog);
+
+static Operand resolve_ident_lvalue(const IdentLValue& il, FnCtx& ctx, IRProgram& prog) {
+    if (auto lop = lookup_local(ctx, il.name))        return *lop;
+    if (auto gs  = lookup_global_slot(prog, il.name)) return GlobalVar{*gs, il.name};
+    throw std::runtime_error("undefined: " + il.name);
+}
+
+static Operand resolve_lvalue_base(const LValue& lv, FnCtx& ctx, IRProgram& prog) {
+    if (lv.kind == LValue::Kind::Ident)
+        return resolve_ident_lvalue(static_cast<const IdentLValue&>(lv), ctx, prog);
+    if (lv.kind == LValue::Kind::Index) {
+        auto& xl  = static_cast<const IndexLValue&>(lv);
+        auto base = resolve_lvalue_base(*xl.base, ctx, prog);
+        auto idx  = lower_expr(*xl.idx, ctx, prog);
+        auto tmp  = ctx.new_temp();
+        ctx.emit(ArrayGet{tmp, base, idx});
+        return tmp;
+    }
+    auto& fl  = static_cast<const FieldLValue&>(lv);
+    auto base = resolve_lvalue_base(*fl.base, ctx, prog);
+    auto tmp  = ctx.new_temp();
+    ctx.emit(FieldGet{tmp, base, fl.field_idx});
+    return tmp;
+}
+
+static void lower_assign(const LValue& lv, Operand val, FnCtx& ctx, IRProgram& prog) {
     switch (lv.kind) {
     case LValue::Kind::Ident: {
-        if (auto lop = lookup_local(ctx, lv.name)) {
+        auto& il = static_cast<const IdentLValue&>(lv);
+        if (auto lop = lookup_local(ctx, il.name))
             ctx.emit(Copy{*lop, val});
-        } else if (auto gs = lookup_global_slot(prog, lv.name)) {
-            ctx.emit(Copy{GlobalVar{*gs, lv.name}, val});
-        } else {
-            throw std::runtime_error("undefined lvalue: " + lv.name);
-        }
+        else if (auto gs = lookup_global_slot(prog, il.name))
+            ctx.emit(Copy{GlobalVar{*gs, il.name}, val});
+        else
+            throw std::runtime_error("undefined lvalue: " + il.name);
         break;
     }
     case LValue::Kind::Index: {
-        std::function<Operand(const LValue&)> get_base = [&](const LValue& base_lv) -> Operand {
-            if (base_lv.kind == LValue::Kind::Ident) {
-                if (auto lop = lookup_local(ctx, base_lv.name)) return *lop;
-                if (auto gs = lookup_global_slot(prog, base_lv.name))
-                    return GlobalVar{*gs, base_lv.name};
-                throw std::runtime_error("undefined: " + base_lv.name);
-            }
-            auto arr_op = get_base(*base_lv.base);
-            auto idx_op = lower_expr(*base_lv.idx, ctx, prog);
-            auto tmp = ctx.new_temp();
-            ctx.emit(ArrayGet{tmp, arr_op, idx_op});
-            return tmp;
-        };
-        auto arr_op = get_base(*lv.base);
-        auto idx_op = lower_expr(*lv.idx, ctx, prog);
+        auto& xl    = static_cast<const IndexLValue&>(lv);
+        auto arr_op = resolve_lvalue_base(*xl.base, ctx, prog);
+        auto idx_op = lower_expr(*xl.idx, ctx, prog);
         ctx.emit(ArraySet{arr_op, idx_op, val});
         break;
     }
     case LValue::Kind::Field: {
-        std::function<Operand(const LValue&)> get_struct = [&](const LValue& base_lv) -> Operand {
-            if (base_lv.kind == LValue::Kind::Ident) {
-                if (auto lop = lookup_local(ctx, base_lv.name)) return *lop;
-                if (auto gs = lookup_global_slot(prog, base_lv.name))
-                    return GlobalVar{*gs, base_lv.name};
-                throw std::runtime_error("undefined: " + base_lv.name);
-            }
-            auto obj_op = get_struct(*base_lv.base);
-            auto tmp = ctx.new_temp();
-            ctx.emit(FieldGet{tmp, obj_op, base_lv.field_idx});
-            return tmp;
-        };
-        auto obj_op = get_struct(*lv.base);
-        ctx.emit(FieldSet{obj_op, lv.field_idx, val});
+        auto& fl    = static_cast<const FieldLValue&>(lv);
+        auto obj_op = resolve_lvalue_base(*fl.base, ctx, prog);
+        ctx.emit(FieldSet{obj_op, fl.field_idx, val});
         break;
     }
     }
 }
 
+static void lower_vardecl(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    auto& v = static_cast<const VarDeclStmt&>(s);
+    // аннотация DynArray + инициализатор фиксированный массив → генерируем NewDynArray+push
+    if (v.ann_type && v.ann_type->is_dynarray() &&
+        v.init->type && v.init->type->is_array())
+        const_cast<Expr*>(v.init.get())->type = v.ann_type;
+    auto val  = lower_expr(*v.init, ctx, prog);
+    int  slot = ctx.fn.num_locals++;
+    ctx.locals[v.name] = slot;
+    ctx.fn.slot_names.resize(ctx.fn.num_locals, "");
+    ctx.fn.slot_names[slot] = v.name;
+    ctx.emit(Copy{LocalVar{slot, v.name}, val});
+}
+
+static void lower_if(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    auto& i          = static_cast<const IfStmt&>(s);
+    auto  cond       = lower_expr(*i.cond, ctx, prog);
+    auto  else_label = ctx.new_label("else");
+    auto  end_label  = ctx.new_label("endif");
+    ctx.emit(JumpFalse{cond, else_label});
+    lower_stmt(*i.then_branch, ctx, prog);
+    if (i.else_branch) ctx.emit(Jump{end_label});
+    ctx.emit(Label{else_label});
+    if (i.else_branch) {
+        lower_stmt(*i.else_branch, ctx, prog);
+        ctx.emit(Label{end_label});
+    }
+}
+
+static void lower_while(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    auto& w     = static_cast<const WhileStmt&>(s);
+    auto  start = ctx.new_label("while_start");
+    auto  end   = ctx.new_label("while_end");
+    ctx.emit(Label{start});
+    ctx.emit(JumpFalse{lower_expr(*w.cond, ctx, prog), end});
+    ctx.loops.push_back({start, end});
+    lower_stmt(*w.body, ctx, prog);
+    ctx.loops.pop_back();
+    ctx.emit(Jump{start});
+    ctx.emit(Label{end});
+}
+
+static void lower_for_range(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    auto& fr   = static_cast<const ForRangeStmt&>(s);
+    int   slot = ctx.fn.num_locals++;
+    ctx.locals[fr.var_name] = slot;
+    ctx.fn.slot_names.resize(ctx.fn.num_locals, "");
+    ctx.fn.slot_names[slot] = fr.var_name;
+    ctx.emit(Copy{LocalVar{slot, fr.var_name}, lower_expr(*fr.start, ctx, prog)});
+
+    auto lstart = ctx.new_label("for_start");
+    auto lend   = ctx.new_label("for_end");
+    ctx.emit(Label{lstart});
+    auto i_op = LocalVar{slot, fr.var_name};
+    auto cond = ctx.new_temp();
+    ctx.emit(IBinInstr{cond, IBinOp::ILt, i_op, lower_expr(*fr.end, ctx, prog)});
+    ctx.emit(JumpFalse{cond, lend});
+    ctx.loops.push_back({lstart, lend});
+    lower_stmt(*fr.body, ctx, prog);
+    ctx.loops.pop_back();
+    auto next = ctx.new_temp();
+    ctx.emit(IBinInstr{next, IBinOp::Add, i_op, ConstInt{1}});
+    ctx.emit(Copy{i_op, next});
+    ctx.emit(Jump{lstart});
+    ctx.emit(Label{lend});
+}
+
+static void lower_for_c(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    auto& fc     = static_cast<const ForCStmt&>(s);
+    auto  lstart = ctx.new_label("forc_start");
+    auto  lend   = ctx.new_label("forc_end");
+    lower_stmt(*fc.init, ctx, prog);
+    ctx.emit(Label{lstart});
+    ctx.emit(JumpFalse{lower_expr(*fc.cond, ctx, prog), lend});
+    ctx.loops.push_back({lstart, lend});
+    lower_stmt(*fc.body, ctx, prog);
+    ctx.loops.pop_back();
+    lower_stmt(*fc.step, ctx, prog);
+    ctx.emit(Jump{lstart});
+    ctx.emit(Label{lend});
+}
+
 static void lower_stmt(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
     switch (s.kind) {
-    case Stmt::Kind::Empty: break;
-
-    case Stmt::Kind::VarDecl: {
-        auto& v = static_cast<const VarDeclStmt&>(s);
-        // Если аннотация DynArray, а инициализатор — фиксированный массив,
-        // переопределяем тип чтобы сгенерировать NewDynArray + push
-        if (v.ann_type && v.ann_type->is_dynarray() &&
-            v.init->type && v.init->type->is_array()) {
-            const_cast<Expr*>(v.init.get())->type = v.ann_type;
-        }
-        auto val = lower_expr(*v.init, ctx, prog);
-        int slot = ctx.fn.num_locals++;
-        ctx.locals[v.name] = slot;
-        ctx.fn.slot_names.resize(ctx.fn.num_locals, "");
-        ctx.fn.slot_names[slot] = v.name;
-        ctx.emit(Copy{LocalVar{slot, v.name}, val});
-        break;
-    }
-
+    case Stmt::Kind::Empty:    break;
+    case Stmt::Kind::VarDecl:  lower_vardecl(s, ctx, prog); break;
     case Stmt::Kind::Assign: {
         auto& a = static_cast<const AssignStmt&>(s);
-        auto val = lower_expr(*a.value, ctx, prog);
-        lower_assign(*a.target, val, ctx, prog);
+        lower_assign(*a.target, lower_expr(*a.value, ctx, prog), ctx, prog);
         break;
     }
-
-    case Stmt::Kind::ExprStmt: {
+    case Stmt::Kind::ExprStmt:
         lower_expr(*static_cast<const ExprStmt&>(s).expr, ctx, prog);
         break;
-    }
-
-    case Stmt::Kind::If: {
-        auto& i = static_cast<const IfStmt&>(s);
-        auto cond = lower_expr(*i.cond, ctx, prog);
-        std::string else_label = ctx.new_label("else");
-        std::string end_label  = ctx.new_label("endif");
-        ctx.emit(JumpFalse{cond, else_label});
-        lower_stmt(*i.then_branch, ctx, prog);
-        if (i.else_branch) ctx.emit(Jump{end_label});
-        ctx.emit(Label{else_label});
-        if (i.else_branch) {
-            lower_stmt(*i.else_branch, ctx, prog);
-            ctx.emit(Label{end_label});
-        }
-        break;
-    }
-
-    case Stmt::Kind::While: {
-        auto& w = static_cast<const WhileStmt&>(s);
-        std::string start  = ctx.new_label("while_start");
-        std::string end_lb = ctx.new_label("while_end");
-        ctx.emit(Label{start});
-        auto cond = lower_expr(*w.cond, ctx, prog);
-        ctx.emit(JumpFalse{cond, end_lb});
-        ctx.loops.push_back({start, end_lb});
-        lower_stmt(*w.body, ctx, prog);
-        ctx.loops.pop_back();
-        ctx.emit(Jump{start});
-        ctx.emit(Label{end_lb});
-        break;
-    }
-
-    case Stmt::Kind::ForRange: {
-        auto& fr = static_cast<const ForRangeStmt&>(s);
-        auto start_val = lower_expr(*fr.start, ctx, prog);
-        int slot = ctx.fn.num_locals++;
-        ctx.locals[fr.var_name] = slot;
-        ctx.fn.slot_names.resize(ctx.fn.num_locals, "");
-        ctx.fn.slot_names[slot] = fr.var_name;
-        ctx.emit(Copy{LocalVar{slot, fr.var_name}, start_val});
-
-        std::string lstart = ctx.new_label("for_start");
-        std::string lend   = ctx.new_label("for_end");
-        ctx.emit(Label{lstart});
-        // условие: i < end
-        auto i_op   = LocalVar{slot, fr.var_name};
-        auto end_op = lower_expr(*fr.end, ctx, prog);
-        auto cond   = ctx.new_temp();
-        ctx.emit(IBinInstr{cond, IBinOp::ILt, i_op, end_op});
-        ctx.emit(JumpFalse{cond, lend});
-        ctx.loops.push_back({lstart, lend});
-        lower_stmt(*fr.body, ctx, prog);
-        ctx.loops.pop_back();
-        // шаг: i = i + 1
-        auto one  = ConstInt{1};
-        auto next = ctx.new_temp();
-        ctx.emit(IBinInstr{next, IBinOp::Add, i_op, one});
-        ctx.emit(Copy{i_op, next});
-        ctx.emit(Jump{lstart});
-        ctx.emit(Label{lend});
-        break;
-    }
-
-    case Stmt::Kind::ForC: {
-        // for init; cond; step { тело }
-        auto& fc = static_cast<const ForCStmt&>(s);
-        lower_stmt(*fc.init, ctx, prog);
-        std::string lstart = ctx.new_label("forc_start");
-        std::string lend   = ctx.new_label("forc_end");
-        ctx.emit(Label{lstart});
-        auto cond_op = lower_expr(*fc.cond, ctx, prog);
-        ctx.emit(JumpFalse{cond_op, lend});
-        ctx.loops.push_back({lstart, lend});
-        lower_stmt(*fc.body, ctx, prog);
-        ctx.loops.pop_back();
-        lower_stmt(*fc.step, ctx, prog);
-        ctx.emit(Jump{lstart});
-        ctx.emit(Label{lend});
-        break;
-    }
-
-    case Stmt::Kind::Block: {
+    case Stmt::Kind::If:       lower_if(s, ctx, prog);       break;
+    case Stmt::Kind::While:    lower_while(s, ctx, prog);    break;
+    case Stmt::Kind::ForRange: lower_for_range(s, ctx, prog); break;
+    case Stmt::Kind::ForC:     lower_for_c(s, ctx, prog);    break;
+    case Stmt::Kind::Block:
         for (auto& st : static_cast<const BlockStmt&>(s).stmts)
             lower_stmt(*st, ctx, prog);
         break;
-    }
-
     case Stmt::Kind::Break:
-        if (!ctx.loops.empty())
-            ctx.emit(Jump{ctx.loops.back().break_label});
+        if (!ctx.loops.empty()) ctx.emit(Jump{ctx.loops.back().break_label});
         break;
-
     case Stmt::Kind::Continue:
-        if (!ctx.loops.empty())
-            ctx.emit(Jump{ctx.loops.back().cont_label});
+        if (!ctx.loops.empty()) ctx.emit(Jump{ctx.loops.back().cont_label});
         break;
-
     case Stmt::Kind::Return: {
         auto& r = static_cast<const ReturnStmt&>(s);
-        if (r.value) {
-            auto val = lower_expr(*r.value, ctx, prog);
-            ctx.emit(ReturnVal{val});
-        } else {
-            ctx.emit(Return{});
-        }
+        if (r.value) ctx.emit(ReturnVal{lower_expr(*r.value, ctx, prog)});
+        else         ctx.emit(Return{});
         break;
     }
     }
@@ -678,14 +667,17 @@ IRProgram lower(Program& /*prog*/,
     // Константные инициализаторы → пул констант
     for (int i = 0; i < static_cast<int>(sem.globals.size()); ++i) {
         auto& gv = *sem.globals[i];
-        if (gv.init->kind == Expr::Kind::IntLit)
-            irp.global_inits[i] = ConstInt{static_cast<IntLitExpr&>(*gv.init).value};
-        else if (gv.init->kind == Expr::Kind::FloatLit)
-            irp.global_inits[i] = ConstFloat{static_cast<FloatLitExpr&>(*gv.init).value};
-        else if (gv.init->kind == Expr::Kind::BoolLit)
-            irp.global_inits[i] = ConstBool{static_cast<BoolLitExpr&>(*gv.init).value};
-        else if (gv.init->kind == Expr::Kind::StringLit)
-            irp.global_inits[i] = ConstString{static_cast<StringLitExpr&>(*gv.init).value};
+        switch (gv.init->kind) {
+        case Expr::Kind::IntLit:
+            irp.global_inits[i] = ConstInt{static_cast<IntLitExpr&>(*gv.init).value};    break;
+        case Expr::Kind::FloatLit:
+            irp.global_inits[i] = ConstFloat{static_cast<FloatLitExpr&>(*gv.init).value}; break;
+        case Expr::Kind::BoolLit:
+            irp.global_inits[i] = ConstBool{static_cast<BoolLitExpr&>(*gv.init).value};   break;
+        case Expr::Kind::StringLit:
+            irp.global_inits[i] = ConstString{static_cast<StringLitExpr&>(*gv.init).value}; break;
+        default: break;
+        }
     }
 
     // Нетривиальные инициализаторы (вызовы функций):
@@ -728,27 +720,16 @@ IRProgram lower(Program& /*prog*/,
 
 // IR печать
 std::string operand_to_str(const Operand& o) {
-    return std::visit([](auto&& v) -> std::string {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, TempVar>)
-            return "t" + std::to_string(v.id);
-        else if constexpr (std::is_same_v<T, LocalVar>)
-            return v.name.empty() ? ("loc" + std::to_string(v.slot)) : v.name;
-        else if constexpr (std::is_same_v<T, GlobalVar>)
-            return "@" + v.name;
-        else if constexpr (std::is_same_v<T, ConstInt>)
-            return std::to_string(v.v);
-        else if constexpr (std::is_same_v<T, ConstUInt>)
-            return std::to_string(v.v) + "u";
-        else if constexpr (std::is_same_v<T, ConstFloat>)
-            return std::to_string(v.v);
-        else if constexpr (std::is_same_v<T, ConstBool>)
-            return v.v ? "true" : "false";
-        else if constexpr (std::is_same_v<T, ConstString>)
-            return "\"" + v.v + "\"";
-        else
-            return "unit";
-    }, o);
+    if (auto* v = std::get_if<TempVar>(&o))    return "t" + std::to_string(v->id);
+    if (auto* v = std::get_if<LocalVar>(&o))   return v->name.empty() ? ("loc" + std::to_string(v->slot)) : v->name;
+    if (auto* v = std::get_if<GlobalVar>(&o))  return "@" + v->name;
+    if (auto* v = std::get_if<ConstInt>(&o))   return std::to_string(v->v);
+    if (auto* v = std::get_if<ConstUInt>(&o))  return std::to_string(v->v) + "u";
+    if (auto* v = std::get_if<ConstFloat>(&o)) return std::to_string(v->v);
+    if (auto* v = std::get_if<ConstBool>(&o))  return v->v ? "true" : "false";
+    if (auto* v = std::get_if<ConstChar>(&o))  return std::string("'") + v->v + "'";
+    if (auto* v = std::get_if<ConstString>(&o)) return "\"" + v->v + "\"";
+    return "unit";
 }
 
 static const char* ibin_str(IBinOp o) {
@@ -769,76 +750,42 @@ static const char* fbin_str(FBinOp o) {
 }
 
 static void dump_instr(const Instr& instr, std::ostream& out) {
-    std::visit([&](auto&& v) {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T,Label>)
-            out << v.name << ":\n";
-        else if constexpr (std::is_same_v<T,IBinInstr>)
-            out << operand_to_str(v.dst)<<" = "
-                <<operand_to_str(v.lhs)<<" "<<ibin_str(v.op)<<" "<<operand_to_str(v.rhs);
-        else if constexpr (std::is_same_v<T,FBinInstr>)
-            out << operand_to_str(v.dst)<<" = "
-                <<operand_to_str(v.lhs)<<" "<<fbin_str(v.op)<<" "<<operand_to_str(v.rhs);
-        else if constexpr (std::is_same_v<T,LBinInstr>)
-            out << operand_to_str(v.dst)<<" = "
-                <<operand_to_str(v.lhs)<<(v.op==LBinOp::And?" and ":" or ")<<operand_to_str(v.rhs);
-        else if constexpr (std::is_same_v<T,IUnInstr>)
-            out << operand_to_str(v.dst)<<" = -"<<operand_to_str(v.src);
-        else if constexpr (std::is_same_v<T,FUnInstr>)
-            out << operand_to_str(v.dst)<<" = f-"<<operand_to_str(v.src);
-        else if constexpr (std::is_same_v<T,LUnInstr>)
-            out << operand_to_str(v.dst)<<" = not "<<operand_to_str(v.src);
-        else if constexpr (std::is_same_v<T,Copy>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src);
-        else if constexpr (std::is_same_v<T,SBinInstr>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<"++str"<<operand_to_str(v.rhs);
-        else if constexpr (std::is_same_v<T,StrLen>)
-            out << operand_to_str(v.dst)<<" = strlen("<<operand_to_str(v.src)<<")";
-        else if constexpr (std::is_same_v<T,ArrayLen>)
-            out << operand_to_str(v.dst)<<" = arrlen("<<operand_to_str(v.src)<<")";
-        else if constexpr (std::is_same_v<T,SEqInstr>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.lhs)<<(v.eq?" seq ":" sneq ")<<operand_to_str(v.rhs);
-        else if constexpr (std::is_same_v<T,NewArray>)
-            out << operand_to_str(v.dst)<<" = new_array["<<v.size<<"]";
-        else if constexpr (std::is_same_v<T,ArrayGet>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"]";
-        else if constexpr (std::is_same_v<T,ArraySet>)
-            out << operand_to_str(v.arr)<<"["<<operand_to_str(v.idx)<<"] = "<<operand_to_str(v.val);
-        else if constexpr (std::is_same_v<T,NewStruct>)
-            out << operand_to_str(v.dst)<<" = new_struct "<<v.type_name;
-        else if constexpr (std::is_same_v<T,FieldGet>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.obj)<<".f"<<v.field_idx;
-        else if constexpr (std::is_same_v<T,FieldSet>)
-            out << operand_to_str(v.obj)<<".f"<<v.field_idx<<" = "<<operand_to_str(v.val);
-        else if constexpr (std::is_same_v<T,Call>) {
-            if (v.dst) out << operand_to_str(*v.dst)<<" = ";
-            out << "call "<<v.fname<<"(";
-            for (size_t i=0;i<v.args.size();++i){if(i)out<<",";out<<operand_to_str(v.args[i]);}
-            out << ")";
-        }
-        else if constexpr (std::is_same_v<T,Cast>)
-            out << operand_to_str(v.dst)<<" = "<<operand_to_str(v.src)
-                <<" as "<<(v.to_type?v.to_type->to_string():"?");
-        else if constexpr (std::is_same_v<T,Jump>)
-            out << "goto "<<v.label;
-        else if constexpr (std::is_same_v<T,JumpFalse>)
-            out << "if_false "<<operand_to_str(v.cond)<<" goto "<<v.label;
-        else if constexpr (std::is_same_v<T,JumpTrue>)
-            out << "if_true "<<operand_to_str(v.cond)<<" goto "<<v.label;
-        else if constexpr (std::is_same_v<T,Return>)
-            out << "return";
-        else if constexpr (std::is_same_v<T,ReturnVal>)
-            out << "return "<<operand_to_str(v.val);
-        else if constexpr (std::is_same_v<T,Print>)
-            out << "print("<<operand_to_str(v.val)<<")";
-        else if constexpr (std::is_same_v<T,Input>)
-            out << operand_to_str(v.dst)<<" = input()";
-        else if constexpr (std::is_same_v<T,Exit>)
-            out << "exit("<<operand_to_str(v.code)<<")";
-        else if constexpr (std::is_same_v<T,Panic>)
-            out << "panic("<<operand_to_str(v.msg)<<")";
-        if constexpr (!std::is_same_v<T,Label>) out << "\n";
-    }, instr);
+    auto o = [](const Operand& op){ return operand_to_str(op); };
+    if (auto* v = std::get_if<Label>(&instr))     { out << v->name << ":\n"; return; }
+    if (auto* v = std::get_if<IBinInstr>(&instr)) { out<<o(v->dst)<<" = "<<o(v->lhs)<<" "<<ibin_str(v->op)<<" "<<o(v->rhs); }
+    else if (auto* v = std::get_if<FBinInstr>(&instr)) { out<<o(v->dst)<<" = "<<o(v->lhs)<<" "<<fbin_str(v->op)<<" "<<o(v->rhs); }
+    else if (auto* v = std::get_if<LBinInstr>(&instr)) { out<<o(v->dst)<<" = "<<o(v->lhs)<<(v->op==LBinOp::And?" and ":" or ")<<o(v->rhs); }
+    else if (auto* v = std::get_if<IUnInstr>(&instr))  { out<<o(v->dst)<<" = -"<<o(v->src); }
+    else if (auto* v = std::get_if<FUnInstr>(&instr))  { out<<o(v->dst)<<" = f-"<<o(v->src); }
+    else if (auto* v = std::get_if<LUnInstr>(&instr))  { out<<o(v->dst)<<" = not "<<o(v->src); }
+    else if (auto* v = std::get_if<Copy>(&instr))      { out<<o(v->dst)<<" = "<<o(v->src); }
+    else if (auto* v = std::get_if<SBinInstr>(&instr)) { out<<o(v->dst)<<" = "<<o(v->lhs)<<"++str"<<o(v->rhs); }
+    else if (auto* v = std::get_if<StrLen>(&instr))    { out<<o(v->dst)<<" = strlen("<<o(v->src)<<")"; }
+    else if (auto* v = std::get_if<ArrayLen>(&instr))  { out<<o(v->dst)<<" = arrlen("<<o(v->src)<<")"; }
+    else if (auto* v = std::get_if<SEqInstr>(&instr))  { out<<o(v->dst)<<" = "<<o(v->lhs)<<(v->eq?" seq ":" sneq ")<<o(v->rhs); }
+    else if (auto* v = std::get_if<NewArray>(&instr))  { out<<o(v->dst)<<" = new_array["<<v->size<<"]"; }
+    else if (auto* v = std::get_if<ArrayGet>(&instr))  { out<<o(v->dst)<<" = "<<o(v->arr)<<"["<<o(v->idx)<<"]"; }
+    else if (auto* v = std::get_if<ArraySet>(&instr))  { out<<o(v->arr)<<"["<<o(v->idx)<<"] = "<<o(v->val); }
+    else if (auto* v = std::get_if<NewStruct>(&instr)) { out<<o(v->dst)<<" = new_struct "<<v->type_name; }
+    else if (auto* v = std::get_if<FieldGet>(&instr))  { out<<o(v->dst)<<" = "<<o(v->obj)<<".f"<<v->field_idx; }
+    else if (auto* v = std::get_if<FieldSet>(&instr))  { out<<o(v->obj)<<".f"<<v->field_idx<<" = "<<o(v->val); }
+    else if (auto* v = std::get_if<Call>(&instr)) {
+        if (v->dst) out<<o(*v->dst)<<" = ";
+        out<<"call "<<v->fname<<"(";
+        for (size_t i=0;i<v->args.size();++i){if(i)out<<",";out<<o(v->args[i]);}
+        out<<")";
+    }
+    else if (auto* v = std::get_if<Cast>(&instr))      { out<<o(v->dst)<<" = "<<o(v->src)<<" as "<<(v->to_type?v->to_type->to_string():"?"); }
+    else if (auto* v = std::get_if<Jump>(&instr))      { out<<"goto "<<v->label; }
+    else if (auto* v = std::get_if<JumpFalse>(&instr)) { out<<"if_false "<<o(v->cond)<<" goto "<<v->label; }
+    else if (auto* v = std::get_if<JumpTrue>(&instr))  { out<<"if_true "<<o(v->cond)<<" goto "<<v->label; }
+    else if (std::get_if<Return>(&instr))               { out<<"return"; }
+    else if (auto* v = std::get_if<ReturnVal>(&instr))  { out<<"return "<<o(v->val); }
+    else if (auto* v = std::get_if<Print>(&instr))      { out<<"print("<<o(v->val)<<")"; }
+    else if (auto* v = std::get_if<Input>(&instr))      { out<<o(v->dst)<<" = input()"; }
+    else if (auto* v = std::get_if<Exit>(&instr))       { out<<"exit("<<o(v->code)<<")"; }
+    else if (auto* v = std::get_if<Panic>(&instr))      { out<<"panic("<<o(v->msg)<<")"; }
+    out << "\n";
 }
 
 void dump_ir(const IRProgram& prog, std::ostream& out) {
