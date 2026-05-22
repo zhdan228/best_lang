@@ -3,7 +3,8 @@
 #include "ast.hpp"
 #include <string>
 #include <vector>
-#include <optional>
+#include <stdexcept>
+#include <expected>
 
 namespace Parser {
 
@@ -19,11 +20,8 @@ struct ParseError {
     }
 };
 
-// Строит AST из потока токенов.
-// Возвращает программу при успехе или первую синтаксическую ошибку.
-std::variant<Program, ParseError>
-parse(const std::vector<Lexer::Token>& tokens, const std::string& filename);
+std::expected<Program, ParseError> parse(const std::vector<Lexer::Token>& tokens, const std::string& filename);
 
 void dump_ast(const Program& prog, std::ostream& out);
 
-} 
+}
