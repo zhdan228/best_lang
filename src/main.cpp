@@ -1,12 +1,3 @@
-/*
- * Точка входа компилятора BestLang (myc).
- *
- * Запускает pipeline компиляции последовательно:
- *   Lexer → Parser → Semantic → IR Lowering → Optimizer → Codegen → [VM]
- *
- * При любой ошибке на фазе — вывод диагностики в stderr и ненулевой код возврата.
- * Флаг --run позволяет сразу выполнить скомпилированный байткод через встроенную VM.
- */
 #include "lexer.hpp"
 #include "parser.hpp"
 #include "semantic.hpp"
@@ -21,7 +12,6 @@
 #include <filesystem>
 #include <cstring>
 
-// Загружает файл в строку 
 static std::string read_file(const std::string& path) {
     std::ifstream f(path);
     if (!f) {
@@ -31,13 +21,11 @@ static std::string read_file(const std::string& path) {
     return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
 }
 
-// Определяет путь выходного файла 
 static std::string default_output(const std::string& src) {
     std::filesystem::path p(src);
     return (p.parent_path() / p.stem()).string() + ".blc";
 }
 
-// Вывод справки по использованию 
 static void usage(const char* prog) {
     std::cerr << "usage: " << prog
               << " <source.bl> [-o <output.blc>] [--dump-tokens] [--dump-ast] [--dump-ir] [--run]\n";
@@ -75,33 +63,29 @@ int main(int argc, char* argv[]) {
     std::string source = read_file(source_path);
     if (source.empty() && !std::filesystem::exists(source_path)) return 1;
 
-    // Фаза 1: Лексический анализ 
     auto lex_result = Lexer::tokenize(source, source_path);
-    if (auto* err = std::get_if<Lexer::LexError>(&lex_result)) {
-        std::cerr << err->format() << "\n";
+    if (!lex_result) {
+        std::cerr << lex_result.error().format() << "\n";
         return 1;
     }
-    auto& tokens = std::get<std::vector<Lexer::Token>>(lex_result);
 
     if (dump_tokens) {
-        Lexer::dump_tokens(tokens, std::cout);
+        Lexer::dump_tokens(lex_result.value(), std::cout);
         return 0;
     }
 
-    // Фаза 2: Синтаксический анализ 
-    auto parse_result = Parser::parse(tokens, source_path);
-    if (auto* err = std::get_if<Parser::ParseError>(&parse_result)) {
-        std::cerr << err->format() << "\n";
+    auto parse_result = Parser::parse(lex_result.value(), source_path);
+    if (!parse_result) {
+        std::cerr << parse_result.error().format() << "\n";
         return 1;
     }
-    auto& prog = std::get<Program>(parse_result);
+    auto& prog = parse_result.value();
 
     if (dump_ast) {
         Parser::dump_ast(prog, std::cout);
         return 0;
     }
 
-    // Фаза 3: Семантический анализ 
     auto sem = Semantic::analyze(prog, source_path);
     if (!sem.errors.empty()) {
         for (auto& e : sem.errors)
@@ -109,10 +93,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Фаза 4: Понижение в IR 
     auto ir_prog = IR::lower(prog, sem, source_path);
-
-    // Фаза 5: Оптимизация (свёртка констант) 
     IR::optimize(ir_prog);
 
     if (dump_ir) {
@@ -120,16 +101,14 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Фаза 6: Генерация кода 
     auto bytecode = Codegen::compile(ir_prog);
     if (!Codegen::write_blc(bytecode, output_path)) {
         std::cerr << "error: cannot write output file '" << output_path << "'\n";
         return 1;
     }
 
-    std::cerr << "compiled: " << source_path << " → " << output_path << "\n";
+    std::cerr << "compiled: " << source_path << " -> " << output_path << "\n";
 
-    // Фаза 7 (опционально): Запуск через встроенную VM 
     if (run_after) {
         auto res = VM::run_bytecode(bytecode);
         return res.exit_code;
