@@ -40,6 +40,8 @@ struct AnalysisResult {
     std::vector<GlobalVarDecl*>  globals;
     // Функции в порядке объявления
     std::vector<FunDecl*>        functions;
+    // Владеющие указатели на инстанции generic функций (живут пока живут results)
+    std::vector<std::unique_ptr<FunDecl>> owned_instances;
 };
 
 AnalysisResult analyze(Program& prog, const std::string& filename);
