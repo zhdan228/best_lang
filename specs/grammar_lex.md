@@ -61,6 +61,8 @@ var   val   fun   return  if    else
 while for   in    break   continue
 struct impl type namespace
 as    true  false  null   void   and   or    not
+int8  int16 int32  int64  uint8  uint16 uint32 uint64
+float32 float64  bool  char  string
 ```
 
 Все ключевые слова зарезервированы и не могут использоваться как идентификаторы.
@@ -114,7 +116,17 @@ STRING_LIT ::= '"' (UTF8_CHAR | ESCAPE)* '"'
 Поддерживаемые escape-последовательности: `\n` `\t` `\r` `\"` `\\` `\0` `\xHH`.
 Строки поддерживают UTF-8: можно писать текст на русском и других языках.
 
-### 6.5. Null литерал
+### 6.5. Символьные литералы
+
+```
+CHAR_ESCAPE ::= '\' ('n' | 't' | 'r' | "'" | '\' | '0' | 'x' HEX HEX)
+CHAR_LIT    ::= "'" (ASCII_CHAR | CHAR_ESCAPE) "'"
+```
+
+Ровно один символ в одинарных кавычках. Тип — `char`.
+Поддерживаемые escape-последовательности: `\n` `\t` `\r` `\'` `\\` `\0` `\xHH`.
+
+### 6.6. Null литерал
 
 ```
 NULL_LIT ::= 'null'
