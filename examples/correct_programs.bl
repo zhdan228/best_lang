@@ -75,6 +75,25 @@ fun find_first_negative(arr: [int32; 6]): int32? {
     return null;
 }
 
+// Дженерики
+
+// Generic функция: максимум двух значений одного типа
+fun gmax<T>(a: T, b: T): T {
+    if a > b { return a; }
+    return b;
+}
+
+// Generic функция: identity
+fun gidentity<T>(x: T): T {
+    return x;
+}
+
+// Generic структура: пара значений
+struct GPair<A, B> {
+    first:  A;
+    second: B;
+}
+
 fun main(): int32 {
     // Числа Фибоначчи 0..7
     for i in 0..8 {
@@ -158,6 +177,24 @@ fun main(): int32 {
     var pi: float64 = 3.14159;
     print(n + pi);
 
+    // Дженерики: generic функции
+    print(gmax(10i32, 30i32));        // T=int32 → 30
+    print(gidentity("hello"));        // T=string → hello
+    print(gmax(1i32, 2i32));          // T=int32 → 2
+
+    // Дженерики: generic структура
+    var pair: GPair<int32, string> = GPair<int32, string>{ first: 7, second: "world" };
+    print(pair.first);                // 7
+    print(pair.second);               // world
+
+    // Comparison vs generic — никакого конфликта
+    val p1: int32 = 0;
+    val p2: int32 = 1;
+    val lt = p1 < p2;                 // сравнение, не generic
+    val gt = p1 > p2;
+    print(lt);                        // true
+    print(gt);                        // false
+
     return 0;
 }
 
@@ -183,4 +220,14 @@ fun main(): int32 {
  * отрицательных нет
  * 150
  * 5.14159
+ *
+ * Дженерики:
+ * 30
+ * hello
+ * 2
+ * 3.14
+ * 7
+ * world
+ * 0
+ * 1
  */

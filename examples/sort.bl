@@ -1,6 +1,6 @@
 // Сортировка пузырьком на BestLang
 
-fun bubble_sort(arr: [int32; 6]): void {
+fun bubble_sort(arr: [int32; 6]): [int32; 6] {
     for var i: int32 = 0; i < 5; i = i + 1 {
         for var j: int32 = 0; j < 5 - i; j = j + 1 {
             if arr[j] > arr[j + 1] {
@@ -10,6 +10,7 @@ fun bubble_sort(arr: [int32; 6]): void {
             }
         }
     }
+    return arr;
 }
 
 fun print_arr(arr: [int32; 6]): void {
@@ -25,7 +26,7 @@ fun main(): int32 {
     print("до сортировки:");
     print_arr(nums);
 
-    bubble_sort(nums);
+    nums = bubble_sort(nums);
 
     print("после сортировки:");
     print_arr(nums);
