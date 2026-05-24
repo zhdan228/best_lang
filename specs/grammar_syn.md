@@ -18,12 +18,13 @@ top_level_decl ::= fun_decl | struct_decl | impl_decl | type_alias | namespace_d
 ## 2. Объявление функций
 
 ```
-fun_decl   ::= 'fun' IDENT '(' param_list? ')' ':' type block
-param_list ::= param (',' param)*
-param      ::= IDENT ':' type
+fun_decl       ::= 'fun' IDENT '(' param_list? ')' ':' type block
+param_list     ::= param (',' param)*
+param          ::= IDENT ':' type
 ```
 
 Тип возврата обязателен. Для функций без возвращаемого значения используется `void`.
+
 
 Примеры:
 
@@ -34,6 +35,11 @@ fun add(a: int32, b: int32): int32 {
 
 fun greet(name: string): void {
     print("Hello, " + name);
+}
+
+fun max<T>(a: T, b: T): T {
+    if a > b { return a; }
+    return b;
 }
 ```
 
@@ -69,6 +75,11 @@ field_decl  ::= IDENT ':' type ';'
 struct Point {
     x: float64;
     y: float64;
+}
+
+struct Pair<A, B> {
+    first:  A;
+    second: B;
 }
 ```
 
@@ -121,7 +132,8 @@ var r: float64 = Math::PI;
 ## 5. Типы
 
 ```
-type      ::= base_type | array_type | dynarray_type | tuple_type | nullable_type | IDENT
+type      ::= base_type | array_type | dynarray_type | tuple_type | nullable_type
+            | IDENT | IDENT '<' type (',' type)* '>'
 
 base_type ::= 'int8'  | 'int16'  | 'int32'  | 'int64'
             | 'uint8' | 'uint16' | 'uint32' | 'uint64'
@@ -133,6 +145,7 @@ dynarray_type ::= '[' type ']'
 tuple_type    ::= '(' type (',' type)+ ')'
 nullable_type ::= type '?'
 ```
+
 
 Массив фиксированного размера: размер — часть типа. `[int32; 4]` и `[int32; 8]` — разные типы.
 Динамический массив: размер определяется в рантайме, изменяется через `.push()` / `.pop()`.
@@ -187,14 +200,22 @@ primary_expr ::= INT_LIT | FLOAT_LIT | BOOL_LIT | STRING_LIT | 'null'
                | IDENT | IDENT '::' IDENT
                | '(' expr ')'
 
-ARRAY_LIT  ::= '[' (expr (',' expr)* ','?)? ']'
-STRUCT_LIT ::= IDENT '{' (IDENT ':' expr (',' IDENT ':' expr)* ','?)? '}'
-TUPLE_LIT  ::= '(' expr ',' expr (',' expr)* ')'
+ARRAY_LIT          ::= '[' (expr (',' expr)* ','?)? ']'
+STRUCT_LIT         ::= IDENT '{' (IDENT ':' expr (',' IDENT ':' expr)* ','?)? '}'
+TUPLE_LIT          ::= '(' expr ',' expr (',' expr)* ')'
 ```
 
 Операторы сравнения нецепочечные: `a < b < c` — синтаксическая ошибка.
 Доступ к полю кортежа: `.0`, `.1`, ... (целый литерал после точки).
 Именованные аргументы: `print(x, end="\n")` — только для встроенных функций.
+
+**Отсутствие конфликта `<` с операторами сравнения:**
+Токен `<` в выражении всегда является оператором сравнения.
+`<` как начало параметров типа встречается только в трёх синтаксически отличимых позициях:
+1. После `fun IDENT` — параметры типа объявления функции.
+2. После `struct IDENT` — параметры типа объявления структуры.
+3. Внутри грамматики типа (`parse_type`) — инстанция `Name<T>`.
+
 
 ---
 
