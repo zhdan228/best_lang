@@ -78,6 +78,21 @@ static TypePtr token_to_base_type(P& p, const Lexer::Token& tok) {
     case TK::String:  return TYPE_STRING;
     case TK::Void:    return TYPE_VOID;
     case TK::Ident:
+        if (p.at(TK::Lt)) {
+            std::string base = tok.lexeme;
+            p.advance();
+            std::vector<TypePtr> args;
+            args.push_back(parse_type(p));
+            if (p.has_error()) return nullptr;
+            while (p.at(TK::Comma)) {
+                p.advance();
+                args.push_back(parse_type(p));
+                if (p.has_error()) return nullptr;
+            }
+            p.expect(TK::Gt);
+            if (p.has_error()) return nullptr;
+            return Type::make_generic_inst(base, std::move(args));
+        }
         return Type::make_struct(tok.lexeme);
     default:
         p.set_error(tok, "expected type, got '" + tok.lexeme + "'");
@@ -212,10 +227,23 @@ static ExprPtr parse_array_lit(P& p, SrcLoc loc) {
 static ExprPtr parse_struct_lit(P& p, SrcLoc loc) {
     if (p.has_error()) return nullptr;
     auto name_tok = p.advance(); // IDENT
+    std::vector<TypePtr> type_args;
+    if (p.at(TK::Lt)) {
+        p.advance();
+        type_args.push_back(parse_type(p));
+        if (p.has_error()) return nullptr;
+        while (p.at(TK::Comma)) {
+            p.advance();
+            type_args.push_back(parse_type(p));
+            if (p.has_error()) return nullptr;
+        }
+        p.expect(TK::Gt);
+        if (p.has_error()) return nullptr;
+    }
     p.advance(); // '{'
     auto e = std::make_unique<StructLitExpr>();
     e->kind = Expr::Kind::StructLit; e->loc = loc;
-    e->type_name = name_tok.lexeme;
+    e->type_name = name_tok.lexeme; e->type_args = std::move(type_args);
     if (!p.at(TK::RBrace)) {
         while (true) {
             auto fn_tok = p.expect(TK::Ident);
@@ -282,6 +310,23 @@ static ExprPtr parse_paren_or_tuple(P& p, SrcLoc loc) {
     return e;
 }
 
+static bool looks_like_generic_struct_lit(const P& p) {
+    size_t i = p.pos + 2;
+    int depth = 0;
+    while (i < p.toks.size()) {
+        auto k = p.toks[i].kind;
+        if (k == TK::Lt)  { ++depth; ++i; continue; }
+        if (k == TK::Gt)  {
+            if (depth == 0) {
+                return i + 1 < p.toks.size() && p.toks[i + 1].kind == TK::LBrace;
+            }
+            --depth; ++i; continue;
+        }
+        if (k == TK::Eof || k == TK::Semicolon || k == TK::LBrace) break;
+        ++i;
+    }
+    return false;
+}
 
 static ExprPtr parse_primary(P& p) {
     if (p.has_error()) return nullptr;
@@ -299,6 +344,8 @@ static ExprPtr parse_primary(P& p) {
         if (p.peek(1).kind == TK::LBrace &&
             (p.peek(2).kind == TK::RBrace ||
              (p.peek(2).kind == TK::Ident && p.peek(3).kind == TK::Colon)))
+            return parse_struct_lit(p, loc);
+        if (p.peek(1).kind == TK::Lt && looks_like_generic_struct_lit(p))
             return parse_struct_lit(p, loc);
         return parse_ident_expr(p, loc);
     case TK::LParen:    return parse_paren_or_tuple(p, loc);
@@ -727,6 +774,18 @@ static TopDeclPtr parse_struct_decl(P& p, SrcLoc loc) {
     if (p.has_error()) return nullptr;
     auto sd = std::make_unique<StructDecl>();
     sd->kind = TopDecl::Kind::Struct; sd->loc = loc; sd->name = name_tok.lexeme;
+    if (p.at(TK::Lt)) {
+        p.advance();
+        sd->type_params.push_back(p.expect(TK::Ident).lexeme);
+        if (p.has_error()) return nullptr;
+        while (p.at(TK::Comma)) {
+            p.advance();
+            sd->type_params.push_back(p.expect(TK::Ident).lexeme);
+            if (p.has_error()) return nullptr;
+        }
+        p.expect(TK::Gt);
+        if (p.has_error()) return nullptr;
+    }
     p.expect(TK::LBrace);
     if (p.has_error()) return nullptr;
     while (!p.at(TK::RBrace) && !p.at(TK::Eof) && !p.has_error()) {
@@ -862,6 +921,18 @@ static TopDeclPtr parse_fun_decl(P& p, SrcLoc loc) {
     if (p.has_error()) return nullptr;
     auto fd = std::make_unique<FunDecl>();
     fd->kind = TopDecl::Kind::Fun; fd->loc = loc; fd->name = name_tok.lexeme;
+    if (p.at(TK::Lt)) {
+        p.advance();
+        fd->type_params.push_back(p.expect(TK::Ident).lexeme);
+        if (p.has_error()) return nullptr;
+        while (p.at(TK::Comma)) {
+            p.advance();
+            fd->type_params.push_back(p.expect(TK::Ident).lexeme);
+            if (p.has_error()) return nullptr;
+        }
+        p.expect(TK::Gt);
+        if (p.has_error()) return nullptr;
+    }
     fd->params = parse_params(p);
     if (p.has_error()) return nullptr;
     p.expect(TK::Colon);
