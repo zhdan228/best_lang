@@ -25,7 +25,7 @@ struct SrcLoc {
 
 struct Expr {
     enum class Kind {
-        IntLit, FloatLit, BoolLit, StringLit, NullLit,
+        IntLit, FloatLit, BoolLit, StringLit, CharLit, NullLit,
         Ident, NamespaceAccess,
         BinOp, UnaryOp, Cast,
         Call, Index, Field, TupleIndex,
@@ -34,6 +34,7 @@ struct Expr {
     Kind    kind;
     SrcLoc  loc;
     TypePtr type; // заполняется семантическим анализатором
+    virtual ~Expr() = default;
 };
 using ExprPtr = std::unique_ptr<Expr>;
 
@@ -42,6 +43,7 @@ struct IntLitExpr   : Expr { int64_t value; std::string suffix; };
 struct FloatLitExpr : Expr { double  value; std::string suffix; };
 struct BoolLitExpr  : Expr { bool    value; };
 struct StringLitExpr: Expr { std::string value; };
+struct CharLitExpr  : Expr { char value; };
 struct NullLitExpr  : Expr {}; // значение null
 
 // Имена
@@ -115,7 +117,8 @@ struct StructLitField {
     ExprPtr     value;
 };
 struct StructLitExpr : Expr {
-    std::string type_name;
+    std::string          type_name; // базовое имя: "Stack"; полное: "Stack" для generic, "MyStruct" для обычных
+    std::vector<TypePtr> type_args; // для generic: [TYPE_INT32]; пусто для обычных структур
     std::vector<StructLitField> fields;
 };
 struct TupleLitExpr : Expr {
@@ -135,6 +138,7 @@ struct Stmt {
     };
     Kind   kind;
     SrcLoc loc;
+    virtual ~Stmt() = default;
 };
 using StmtPtr = std::unique_ptr<Stmt>;
 
@@ -148,18 +152,17 @@ struct VarDeclStmt : Stmt {
     bool         is_val;   // true → val (иммутабельная)
 };
 
-// L-значение для присваивания
 struct LValue {
     enum class Kind { Ident, Index, Field };
-    Kind kind;
+    Kind   kind;
     SrcLoc loc;
-    std::string name;               // для Ident
-    std::unique_ptr<LValue> base;   // база для Index и Field
-    ExprPtr idx;                    // индекс для Index
-    std::string field;              // имя поля для Field
-    int field_idx = -1;             // индекс поля (заполняется семантикой)
+    virtual ~LValue() = default;
 };
 using LValuePtr = std::unique_ptr<LValue>;
+
+struct IdentLValue : LValue { std::string name; };
+struct IndexLValue : LValue { LValuePtr base; ExprPtr idx; };
+struct FieldLValue : LValue { LValuePtr base; std::string field; int field_idx = -1; };
 
 struct AssignStmt : Stmt {
     LValuePtr target;
@@ -210,6 +213,7 @@ struct TopDecl {
     enum class Kind { Fun, Struct, TypeAlias, Namespace, GlobalVar, Impl };
     Kind   kind;
     SrcLoc loc;
+    virtual ~TopDecl() = default;
 };
 using TopDeclPtr = std::unique_ptr<TopDecl>;
 
@@ -220,9 +224,10 @@ struct Param {
 };
 
 struct FunDecl : TopDecl {
-    std::string        name;
-    std::vector<Param> params;
-    TypePtr            ret_type;
+    std::string              name;
+    std::vector<std::string> type_params; // generic: ["T", "U"]
+    std::vector<Param>       params;
+    TypePtr                  ret_type;
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -233,8 +238,9 @@ struct FieldDecl {
 };
 
 struct StructDecl : TopDecl {
-    std::string             name;
-    std::vector<FieldDecl>  fields;
+    std::string              name;
+    std::vector<std::string> type_params; // generic: ["T"]
+    std::vector<FieldDecl>   fields;
 };
 
 struct TypeAliasDecl : TopDecl {
