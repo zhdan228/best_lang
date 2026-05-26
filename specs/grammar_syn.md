@@ -18,13 +18,15 @@ top_level_decl ::= fun_decl | struct_decl | impl_decl | type_alias | namespace_d
 ## 2. Объявление функций
 
 ```
-fun_decl       ::= 'fun' IDENT '(' param_list? ')' ':' type block
+fun_decl       ::= 'fun' IDENT type_params? '(' param_list? ')' ':' type block
 param_list     ::= param (',' param)*
 param          ::= IDENT ':' type
+type_params    ::= '<' IDENT (',' IDENT)* '>'
 ```
 
 Тип возврата обязателен. Для функций без возвращаемого значения используется `void`.
 
+Если объявлены параметры типов `<T, U>`, функция является обобщённой (generic).
 
 Примеры:
 
@@ -37,6 +39,7 @@ fun greet(name: string): void {
     print("Hello, " + name);
 }
 
+// Generic: T выводится из аргументов при вызове
 fun max<T>(a: T, b: T): T {
     if a > b { return a; }
     return b;
@@ -65,7 +68,7 @@ type Matrix4 = [float64; 16];
 ### 3.2. Структуры
 
 ```
-struct_decl ::= 'struct' IDENT '{' field_decl* '}'
+struct_decl ::= 'struct' IDENT type_params? '{' field_decl* '}'
 field_decl  ::= IDENT ':' type ';'
 ```
 
@@ -77,6 +80,7 @@ struct Point {
     y: float64;
 }
 
+// Generic структура
 struct Pair<A, B> {
     first:  A;
     second: B;
@@ -144,8 +148,10 @@ array_type    ::= '[' type ';' INT_LIT ']'
 dynarray_type ::= '[' type ']'
 tuple_type    ::= '(' type (',' type)+ ')'
 nullable_type ::= type '?'
+generic_type  ::= IDENT '<' type (',' type)* '>'
 ```
 
+Форма `IDENT<T>` — инстанция обобщённой структуры, используется только в позиции типа.
 
 Массив фиксированного размера: размер — часть типа. `[int32; 4]` и `[int32; 8]` — разные типы.
 Динамический массив: размер определяется в рантайме, изменяется через `.push()` / `.pop()`.
@@ -196,12 +202,13 @@ positional_arg ::= expr
 named_arg    ::= IDENT '=' expr
 
 primary_expr ::= INT_LIT | FLOAT_LIT | BOOL_LIT | STRING_LIT | 'null'
-               | ARRAY_LIT | STRUCT_LIT | TUPLE_LIT
+               | ARRAY_LIT | STRUCT_LIT | GENERIC_STRUCT_LIT | TUPLE_LIT
                | IDENT | IDENT '::' IDENT
                | '(' expr ')'
 
 ARRAY_LIT          ::= '[' (expr (',' expr)* ','?)? ']'
 STRUCT_LIT         ::= IDENT '{' (IDENT ':' expr (',' IDENT ':' expr)* ','?)? '}'
+GENERIC_STRUCT_LIT ::= IDENT '<' type (',' type)* '>' '{' (IDENT ':' expr (',' IDENT ':' expr)* ','?)? '}'
 TUPLE_LIT          ::= '(' expr ',' expr (',' expr)* ')'
 ```
 
@@ -215,7 +222,9 @@ TUPLE_LIT          ::= '(' expr ',' expr (',' expr)* ')'
 1. После `fun IDENT` — параметры типа объявления функции.
 2. После `struct IDENT` — параметры типа объявления структуры.
 3. Внутри грамматики типа (`parse_type`) — инстанция `Name<T>`.
+4. После `IDENT` в первичном выражении с lookahead `IDENT '<' ... '>' '{'` — generic struct literal.
 
+В позиции произвольного выражения `x < y` — всегда сравнение; вызов generic функции пишется без `<>` (`max(a, b)` — тип T выводится автоматически).
 
 ---
 
