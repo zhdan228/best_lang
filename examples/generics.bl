@@ -1,0 +1,82 @@
+// Примеры дженериков в BestLang
+
+// 1. Generic функции
+
+// max: возвращает бо́льшее из двух значений любого числового типа
+fun max<T>(a: T, b: T): T {
+    if a > b { return a; }
+    return b;
+}
+
+// min: возвращает меньшее из двух значений
+fun min<T>(a: T, b: T): T {
+    if a < b { return a; }
+    return b;
+}
+
+// swap: возвращает кортеж с переставленными значениями
+fun swap<A, B>(a: A, b: B): (B, A) {
+    return (b, a);
+}
+
+// identity: возвращает аргумент без изменений
+fun identity<T>(x: T): T {
+    return x;
+}
+
+// 2. Generic структуры
+
+// Пара значений двух возможно разных типов
+struct Pair<A, B> {
+    first:  A;
+    second: B;
+}
+
+// Стек фиксированного размера (упрощённый)
+struct Box<T> {
+    value: T;
+}
+
+// 3. Демонстрация использования
+
+fun main(): void {
+    // Generic функции — тип T выводится из аргументов автоматически
+
+    val a = max(10i32, 20i32);    // T = int32,   a = 20
+    val b = max(3.14, 2.71);      // T = float64, b = 3.14
+    val c = max(100i64, 200i64);  // T = int64,   c = 200
+    print(a);
+    print(b);
+    print(c);
+
+    val d = min(5i32, 3i32);      // T = int32,   d = 3
+    print(d);
+
+    // Та же функция max работает с разными типами — каждая инстанция отдельна
+    val e = identity(42i32);
+    val f = identity("hello");
+    print(e);
+    print(f);
+
+    // Generic структуры
+    var p: Pair<int32, string> = Pair<int32, string>{ first: 7, second: "world" };
+    print(p.first);
+    print(p.second);
+
+    var box: Box<float64> = Box<float64>{ value: 3.14 };
+    print(box.value);
+
+    // Проверяем, что < и > в выражениях работают как сравнения, а не generic
+    val x = 5i32;
+    val y = 10i32;
+    val less  = x < y;   // сравнение, не generic
+    val great = x > y;   // сравнение, не generic
+    print(less);
+    print(great);
+
+    // Смешанное: сравнение и generic рядом
+    val m = max(x, y);   // generic max
+    val cmp = x < m;     // сравнение — никакого конфликта
+    print(m);
+    print(cmp);
+}
