@@ -1,0 +1,38 @@
+// A.3.1: перегрузка с неявными приведениями
+
+fun describe(x: int32): void {
+    print("int32");
+    print(x);
+}
+
+fun describe(x: float64): void {
+    print("float64");
+    print(x);
+}
+
+fun describe(x: string): void {
+    print("string");
+    print(x);
+}
+
+// два overload — int64 и string, int32 -> int64 однозначно
+fun show(x: int64): void { print("int64"); print(x); }
+fun show(x: string): void { print("str"); print(x); }
+
+// точное совпадение должно выиграть над coercion
+fun pick(x: int32): void { print("exact int32"); }
+fun pick(x: int64): void { print("exact int64"); }
+
+fun main(): void {
+    // точные совпадения (pass 1)
+    describe(42i32);
+    describe(3.14);
+    describe("hello");
+
+    // coercion: int32 -> int64, string не подходит -> однозначно
+    show(5i32);
+
+    // точное должно выиграть — int32 не расширяется до int32 нужды нет
+    pick(100i32);
+    pick(100i64);
+}

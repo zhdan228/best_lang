@@ -947,6 +947,23 @@ TypePtr Analyser::check_call_expr(Expr& e) {
         if (ovl && !ovl->empty()) {
             std::vector<TypePtr> arg_types;
             for (auto& a : c.args) arg_types.push_back(check_expr(*a));
+
+            // Pass 1: exact match — предпочитается более конкретный тип
+            for (auto& sym : *ovl) {
+                if (sym.param_types.size() != arg_types.size()) continue;
+                bool match = true;
+                for (size_t i = 0; i < arg_types.size(); ++i) {
+                    auto rp = resolve(sym.param_types[i]), ra = resolve(arg_types[i]);
+                    if (!ra || !rp || *ra != *rp) { match = false; break; }
+                }
+                if (match) {
+                    static_cast<IdentExpr&>(*c.callee).name = mangle(fname, sym.param_types);
+                    return e.type = sym.type;
+                }
+            }
+
+            // Pass 2: coercion match — неявные приведения, проверка на неоднозначность
+            const Symbol* coerce_match = nullptr;
             for (auto& sym : *ovl) {
                 if (sym.param_types.size() != arg_types.size()) continue;
                 bool match = true;
@@ -955,10 +972,20 @@ TypePtr Analyser::check_call_expr(Expr& e) {
                     if (ra && rp && *ra != *rp && !can_widen(ra, rp)) { match = false; break; }
                 }
                 if (match) {
-                    static_cast<IdentExpr&>(*c.callee).name = mangle(fname, sym.param_types);
-                    return e.type = sym.type;
+                    if (coerce_match) {
+                        err(e.loc, "ambiguous overload of '" + fname + "': multiple candidates match with implicit conversions");
+                        return e.type = TYPE_INT32;
+                    }
+                    coerce_match = &sym;
                 }
             }
+            if (coerce_match) {
+                for (size_t i = 0; i < c.args.size(); ++i)
+                    maybe_widen(c.args[i], resolve(coerce_match->param_types[i]));
+                static_cast<IdentExpr&>(*c.callee).name = mangle(fname, coerce_match->param_types);
+                return e.type = coerce_match->type;
+            }
+
             err(e.loc, "no matching overload of '" + fname + "' for given arguments");
             return e.type = TYPE_INT32;
         }
