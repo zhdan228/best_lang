@@ -581,12 +581,15 @@ static StmtPtr parse_var_decl(P& p, SrcLoc loc) {
     TypePtr ann;
     if (p.at(TK::Colon)) { p.advance(); ann = parse_type(p); }
     if (p.has_error()) return nullptr;
-    p.expect(TK::Assign);
-    if (p.has_error()) return nullptr;
     auto s = std::make_unique<VarDeclStmt>();
     s->kind = Stmt::Kind::VarDecl; s->loc = loc;
-    s->name = name_tok.lexeme; s->ann_type = std::move(ann);
-    s->init = parse_expr(p); s->is_val = is_val;
+    s->name = name_tok.lexeme; s->ann_type = std::move(ann); s->is_val = is_val;
+    if (p.at(TK::Assign)) {
+        p.advance();
+        s->init = parse_expr(p);
+    } else {
+        s->init = nullptr; // семантика заполнит нулями если тип позволяет
+    }
     if (p.has_error()) return nullptr;
     p.expect(TK::Semicolon);
     if (p.has_error()) return nullptr;
