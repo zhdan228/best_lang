@@ -217,7 +217,7 @@ static Token make_int_token(L& l, const std::string& raw, int base, uint32_t lin
         else if (s == "u16") tok.num.u16 = (uint16_t)u;
         else if (s == "u32") tok.num.u32 = (uint32_t)u;
         else if (s == "u64") tok.num.u64 = u;
-        else                 tok.num.i32 = (int32_t)u;
+        else                 tok.num.i64 = (int64_t)u;
     } catch (...) {
         l.set_error("integer literal out of range: '" + raw + "'");
         return {};

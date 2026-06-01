@@ -1112,7 +1112,15 @@ TypePtr Analyser::check_struct_lit(Expr& e) {
 
 TypePtr Analyser::check_expr(Expr& e) {
     switch (e.kind) {
-    case Expr::Kind::IntLit:          { auto& il = static_cast<IntLitExpr&>(e);   return e.type = type_for_int_suffix(il.suffix); }
+    case Expr::Kind::IntLit: {
+        auto& il = static_cast<IntLitExpr&>(e);
+        if (il.suffix.empty()) {
+            if (il.value >= -2147483648LL && il.value <= 2147483647LL)
+                return e.type = TYPE_INT32;
+            return e.type = TYPE_INT64;
+        }
+        return e.type = type_for_int_suffix(il.suffix);
+    }
     case Expr::Kind::FloatLit:        { auto& fl = static_cast<FloatLitExpr&>(e); return e.type = type_for_float_suffix(fl.suffix); }
     case Expr::Kind::BoolLit:         return e.type = TYPE_BOOL;
     case Expr::Kind::CharLit:         return e.type = TYPE_CHAR;
@@ -1196,12 +1204,62 @@ bool Analyser::always_returns(const Stmt& s) {
 
 // check_stmt helpers 
 
+static ExprPtr make_zero_array_lit(const ArrayType& at, SrcLoc loc) {
+    auto al = std::make_unique<ArrayLitExpr>();
+    al->kind = Expr::Kind::ArrayLit; al->loc = loc;
+    for (int64_t zi = 0; zi < at.size; ++zi) {
+        ExprPtr zero;
+        if (at.elem->is_char()) {
+            auto lit = std::make_unique<CharLitExpr>();
+            lit->kind = Expr::Kind::CharLit; lit->loc = loc;
+            lit->value = '\0'; zero = std::move(lit);
+        } else if (at.elem->is_int()) {
+            auto lit = std::make_unique<IntLitExpr>();
+            lit->kind = Expr::Kind::IntLit; lit->loc = loc;
+            lit->value = 0; zero = std::move(lit);
+        } else if (at.elem->is_float()) {
+            auto lit = std::make_unique<FloatLitExpr>();
+            lit->kind = Expr::Kind::FloatLit; lit->loc = loc;
+            lit->value = 0.0; zero = std::move(lit);
+        } else if (at.elem->is_bool()) {
+            auto lit = std::make_unique<BoolLitExpr>();
+            lit->kind = Expr::Kind::BoolLit; lit->loc = loc;
+            lit->value = false; zero = std::move(lit);
+        } else if (at.elem->is_string()) {
+            auto lit = std::make_unique<StringLitExpr>();
+            lit->kind = Expr::Kind::StringLit; lit->loc = loc;
+            lit->value = ""; zero = std::move(lit);
+        }
+        if (zero) al->elements.push_back(std::move(zero));
+    }
+    al->type = Type::make_array(at.elem, at.size);
+    return al;
+}
+
 void Analyser::check_vardecl_stmt(Stmt& s) {
     auto& v        = static_cast<VarDeclStmt&>(s);
-    auto  init_type = check_expr(*v.init);
     TypePtr declared;
     if (v.ann_type) {
         declared = resolve(v.ann_type);
+        // объявление без инициализатора — нулевая инициализация для массивов
+        if (!v.init) {
+            if (declared->is_array()) {
+                v.init = make_zero_array_lit(static_cast<const ArrayType&>(*declared), s.loc);
+            } else {
+                err(s.loc, "variable '" + v.name + "': initializer required for type " + declared->to_string());
+            }
+        }
+    } else if (!v.init) {
+        err(s.loc, "variable '" + v.name + "': type annotation or initializer required");
+    }
+    auto  init_type = check_expr(*v.init);
+    if (v.ann_type) {
+        // zero-init: var x: [T; N] = []  →  заменить пустой литерал нулевым массивом
+        if (declared->is_array() && init_type && init_type->is_array() &&
+            static_cast<const ArrayType&>(*init_type).size == 0) {
+            v.init = make_zero_array_lit(static_cast<const ArrayType&>(*declared), v.init->loc);
+            init_type = check_expr(*v.init);
+        }
         bool dyn_compat  = declared->is_dynarray() && init_type &&
                            (init_type->is_array()||init_type->is_dynarray()) &&
                            *type_elem(*declared) == *type_elem(*init_type);
