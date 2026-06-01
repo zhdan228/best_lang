@@ -416,15 +416,14 @@ void VMState::exec_builtin_op(uint8_t op) {
         push(v); break;
     }
     case Op::INPUT_INT: {
-        std::string line; std::getline(std::cin, line);
-        try { Value v; v.kind=Value::Kind::Int; v.i=(int64_t)std::stol(line); push(v); }
-        catch(...) { runtime_error("input_int(): cannot parse \""+line+"\" as integer"); }
-        break;
+        int64_t n = 0;
+        if (!(std::cin >> n)) { runtime_error("input_int(): failed to read integer"); }
+        Value v; v.kind=Value::Kind::Int; v.i=n; push(v); break;
     }
     case Op::INPUT_FLOAT: {
-        std::string line; std::getline(std::cin, line);
-        try { Value v; v.kind=Value::Kind::Float; v.f=std::stod(line); push(v); }
-        catch(...) { runtime_error("input_float(): cannot parse \""+line+"\" as float"); }
+        double f = 0.0;
+        if (!(std::cin >> f)) { runtime_error("input_float(): failed to read float"); }
+        Value v; v.kind=Value::Kind::Float; v.f=f; push(v);
         break;
     }
     case Op::TO_INT: {
