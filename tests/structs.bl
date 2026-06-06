@@ -1,0 +1,119 @@
+// структуры, методы, вложенные поля, namespace, type alias
+
+type Label = string;
+
+namespace Math {
+    val PI: float64 = 3.141592653589793;
+    val E:  float64 = 2.718281828459045;
+}
+
+namespace Colors {
+    val RED:   string = "red";
+    val GREEN: string = "green";
+}
+
+struct Point {
+    x: float64;
+    y: float64;
+}
+
+impl Point {
+    fun dist_sq(self: Point): float64 {
+        return self.x * self.x + self.y * self.y;
+    }
+    fun add(self: Point, other: Point): Point {
+        return Point { x: self.x + other.x, y: self.y + other.y };
+    }
+    fun scale(self: Point, k: float64): Point {
+        return Point { x: self.x * k, y: self.y * k };
+    }
+    fun eq(self: Point, other: Point): bool {
+        return self.x == other.x and self.y == other.y;
+    }
+}
+
+struct Circle {
+    cx: float64;
+    cy: float64;
+    r:  float64;
+}
+
+impl Circle {
+    fun area(self: Circle): float64 {
+        return Math::PI * self.r * self.r;
+    }
+    fun contains(self: Circle, px: float64, py: float64): bool {
+        val dx = px - self.cx;
+        val dy = py - self.cy;
+        return dx * dx + dy * dy <= self.r * self.r;
+    }
+}
+
+struct Person {
+    name:  string;
+    age:   int32;
+    score: float64;
+}
+
+impl Person {
+    fun greet(self: Person): string {
+        return "Hello, " + self.name;
+    }
+    fun is_adult(self: Person): bool {
+        return self.age >= 18;
+    }
+    fun grade(self: Person): string {
+        if self.score >= 90.0 { return "A"; }
+        if self.score >= 75.0 { return "B"; }
+        return "C";
+    }
+}
+
+fun main(): int32 {
+    // тест 1: namespace
+    print("тест 1:");
+    print(Math::PI);
+    print(Math::E);
+    print(Colors::RED);
+    print(Colors::GREEN);
+    print("");
+
+    // тест 2: методы Point
+    print("тест 2:");
+    val p1 = Point { x: 3.0, y: 4.0 };
+    val p2 = Point { x: 1.0, y: 2.0 };
+    print(p1.dist_sq());
+    val p3 = p1.add(p2);
+    print(p3.x); print(p3.y);
+    val p4 = p1.scale(2.0);
+    print(p4.x); print(p4.y);
+    print(p1.eq(Point { x: 3.0, y: 4.0 }));
+    print(p1.eq(p2));
+    print("");
+
+    // тест 3: Circle
+    print("тест 3:");
+    val c = Circle { cx: 0.0, cy: 0.0, r: 5.0 };
+    print(c.area());
+    print(c.contains(3.0, 4.0));
+    print(c.contains(5.0, 5.0));
+    print("");
+
+    // тест 4: Person
+    print("тест 4:");
+    val alice = Person { name: "Alice", age: 25, score: 92.0 };
+    print(alice.greet());
+    print(alice.is_adult());
+    print(alice.grade());
+    val bob = Person { name: "Bob", age: 16, score: 70.0 };
+    print(bob.is_adult());
+    print(bob.grade());
+    print("");
+
+    // тест 5: type alias
+    print("тест 5:");
+    var tag: Label = "test-label";
+    print(tag);
+
+    return 0;
+}

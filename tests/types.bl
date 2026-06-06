@@ -1,0 +1,64 @@
+// числовые типы, суффиксы, литералы, приведение, неявное расширение
+
+type Score = int32;
+type Name  = string;
+
+fun main(): int32 {
+    // тест 1: числовые типы и суффиксы
+    print("тест 1:");
+    var a: int8   = 127i8;
+    var b: int16  = 1000i16;
+    var c: int32  = 2000000;
+    var d: int64  = 9000000000i64;
+    var e: uint8  = 255u8;
+    var f: uint16 = 60000u16;
+    var g: uint32 = 4000000000u32;
+    var h: uint64 = 10000000000u64;
+    var fi: float32 = 3.14f32;
+    var fj: float64 = 2.718281828;
+    print(a); print(b); print(c); print(d);
+    print(e); print(f); print(g); print(h);
+    print(fi); print(fj);
+    print("");
+
+    // тест 2: hex, bin, sci литералы
+    print("тест 2:");
+    val hex = 0xFF;
+    val bin = 0b1010;
+    val sci = 1.5e3;
+    print(hex); print(bin); print(sci);
+    print("");
+
+    // тест 3: явное приведение as
+    print("тест 3:");
+    val flt: float64 = 9.99;
+    val to_int: int32 = flt as int32;
+    print(to_int);
+    val big: int64 = 300i64;
+    val trunc: int8 = big as int8;
+    print(trunc);
+    print("");
+
+    // тест 4: неявное расширение
+    print("тест 4:");
+    var small: int8 = 50i8;
+    var normal: int32 = 100;
+    print(small + normal);
+    var n: int32 = 3;
+    var pi: float64 = 3.14;
+    print(n + pi);
+    print("");
+
+    // тест 5: автовывод типов и type alias
+    print("тест 5:");
+    val x = 42;
+    val y = 3.14;
+    val z = true;
+    val s = "hello";
+    print(x); print(y); print(z); print(s);
+    var sc: Score = 95;
+    var nm: Name  = "Alice";
+    print(sc); print(nm);
+
+    return 0;
+}

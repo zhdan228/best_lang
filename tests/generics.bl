@@ -1,0 +1,96 @@
+// дженерики (A.2.17) и автовывод типов-аргументов (A.3.4)
+
+fun identity<T>(x: T): T { return x; }
+
+fun gmax<T>(a: T, b: T): T {
+    if a > b { return a; }
+    return b;
+}
+
+fun gmin<T>(a: T, b: T): T {
+    if a < b { return a; }
+    return b;
+}
+
+fun gswap<A, B>(a: A, b: B): (B, A) {
+    return (b, a);
+}
+
+fun clamp<T>(v: T, lo: T, hi: T): T {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+}
+
+struct Pair<A, B> {
+    first:  A;
+    second: B;
+}
+
+struct Triple<A, B, C> {
+    a: A;
+    b: B;
+    c: C;
+}
+
+fun make_pair<A, B>(x: A, y: B): Pair<A, B> {
+    return Pair<A, B> { first: x, second: y };
+}
+
+fun main(): int32 {
+    // тест 1: автовывод T
+    print("тест 1:");
+    print(identity(38i32));
+    print(identity("hello"));
+    print(identity(true));
+    print(identity(3.14));
+    print("");
+
+    // тест 2: gmax
+    print("тест 2:");
+    print(gmax(10i32, 20i32));
+    print(gmax(1.5, 2.5));
+    print(gmax(100i64, 50i64));
+    print("");
+
+    // тест 3: gmin
+    print("тест 3:");
+    print(gmin(10i32, 20i32));
+    print(gmin(3.14, 2.71));
+    print("");
+
+    // тест 4: gswap
+    print("тест 4:");
+    val p = gswap(1i32, "one");
+    print(p.0); print(p.1);
+    print("");
+
+    // тест 5: clamp
+    print("тест 5:");
+    print(clamp(15i32, 0i32, 10i32));
+    print(clamp(5i32,  0i32, 10i32));
+    print(clamp(-3i32, 0i32, 10i32));
+    print(clamp(1.5, 0.0, 1.0));
+    print("");
+
+    // тест 6: Pair и Triple
+    print("тест 6:");
+    var pr: Pair<int32, string> = Pair<int32, string> { first: 7, second: "seven" };
+    print(pr.first); print(pr.second);
+    val pr2 = make_pair(3.14, true);
+    print(pr2.first); print(pr2.second);
+    var tr: Triple<int32, float64, string> = Triple<int32, float64, string> {
+        a: 1, b: 2.5, c: "hi"
+    };
+    print(tr.a); print(tr.b); print(tr.c);
+    print("");
+
+    // тест 7: разные инстанциации одного типа
+    print("тест 7:");
+    var pi: Pair<int32, int32>   = Pair<int32, int32>   { first: 10, second: 20 };
+    var ps: Pair<string, string> = Pair<string, string> { first: "x", second: "y" };
+    print(pi.first + pi.second);
+    print(ps.first + ps.second);
+
+    return 0;
+}

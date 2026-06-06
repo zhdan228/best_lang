@@ -1,0 +1,76 @@
+// управление потоком: if/else, while, for-range, for-c, break, continue, рекурсия
+
+fun factorial(n: int32): int32 {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+
+fun fib(n: int32): int32 {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fun is_even(n: int32): bool {
+    if n == 0 { return true; }
+    return is_odd(n - 1);
+}
+fun is_odd(n: int32): bool {
+    if n == 0 { return false; }
+    return is_even(n - 1);
+}
+
+fun main(): int32 {
+    // тест 1: if / else if / else
+    print("тест 1:");
+    var grade: int32 = 78;
+    if grade >= 90 { print("A"); }
+    else if grade >= 75 { print("B"); }
+    else if grade >= 60 { print("C"); }
+    else { print("F"); }
+    print("");
+
+    // тест 2: while с break и continue
+    print("тест 2:");
+    var i: int32 = 0;
+    while i < 10 {
+        i = i + 1;
+        if i == 5 { continue; }
+        if i == 8 { break; }
+        print(i);
+    }
+    print("");
+
+    // тест 3: for-range
+    print("тест 3:");
+    var sum: int32 = 0;
+    for k in 1..6 { sum = sum + k; }
+    print(sum);
+    print("");
+
+    // тест 4: for-C
+    print("тест 4:");
+    var prod: int32 = 1;
+    for var m: int32 = 1; m <= 5; m = m + 1 {
+        prod = prod * m;
+    }
+    print(prod);
+    print("");
+
+    // тест 5: вложенные циклы — таблица умножения 3x3
+    print("тест 5:");
+    for a in 1..4 {
+        for b in 1..4 {
+            print(a * b);
+        }
+    }
+    print("");
+
+    // тест 6: рекурсия
+    print("тест 6:");
+    print(factorial(6));
+    print(fib(7));
+    print(is_even(4));
+    print(is_odd(7));
+
+    return 0;
+}

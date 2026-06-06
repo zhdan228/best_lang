@@ -1,0 +1,100 @@
+// Сжатие последовательности 
+
+fun digitChar(d: int32): string {
+    if d == 0 { return "0"; }
+    if d == 1 { return "1"; }
+    if d == 2 { return "2"; }
+    if d == 3 { return "3"; }
+    if d == 4 { return "4"; }
+    if d == 5 { return "5"; }
+    if d == 6 { return "6"; }
+    if d == 7 { return "7"; }
+    if d == 8 { return "8"; }
+    return "9";
+}
+
+fun intToStr(n: int32): string {
+    if n == 0 { return "0"; }
+    var s: string = "";
+    var x: int32 = n;
+    var neg: bool = false;
+    if x < 0 { neg = true; x = 0 - x; }
+    while x > 0 {
+        s = digitChar(x % 10) + s;
+        x = x / 10;
+    }
+    if neg { s = "-" + s; }
+    return s;
+}
+
+fun compressSequence(arr: [int32], length: int32): void {
+    if length == 0 {
+        print("");
+        return;
+    }
+
+    var result: string = "";
+    var i: int32 = 0;
+
+    while i < length {
+        val cur: int32 = arr.get(i);
+        var count: int32 = 1;
+
+        while i + count < length {
+            if arr.get(i + count) != cur { break; }
+            count = count + 1;
+        }
+
+        if result != "" { result = result + " "; }
+        result = result + "(" + intToStr(cur) + "," + intToStr(count) + ")";
+
+        i = i + count;
+    }
+
+    print(result);
+}
+
+fun main(): int32 {
+    // тест 1: пример из задания
+    print("тест 1:");
+    var a1: [int32] = [1, 1, 1, 2, 3, 3, 4, 4, 4, 4];
+    compressSequence(a1, 10);
+    print("");
+
+    // тест 2: один элемент
+    print("тест 2:");
+    var a2: [int32] = [28];
+    compressSequence(a2, 1);
+    print("");
+
+    // тест 3: пустой массив
+    print("тест 3:");
+    var a3: [int32] = [];
+    compressSequence(a3, 0);
+    print("");
+
+    // тест 4: все разные
+    print("тест 4:");
+    var a4: [int32] = [5, 3, 7, 1];
+    compressSequence(a4, 4);
+    print("");
+
+    // тест 5: все одинаковые
+    print("тест 5:");
+    var a5: [int32] = [9, 9, 9, 9, 9];
+    compressSequence(a5, 5);
+    print("");
+
+    // тест 6: отрицательные
+    print("тест 6:");
+    var a6: [int32] = [-2, -2, 1, 1, 1];
+    compressSequence(a6, 5);
+    print("");
+
+    // тест 7: чередование
+    print("тест 7:");
+    var a7: [int32] = [-2, -2, 1, 1, -2, -2, 1, 1];
+    compressSequence(a7, 8);
+
+    return 0;
+}

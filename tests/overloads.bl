@@ -1,0 +1,61 @@
+// перегрузка функций (A.2.9) и неявные приведения при перегрузке (A.3.1)
+
+fun describe(x: int32):   string { return "int32"; }
+fun describe(x: float64): string { return "float64"; }
+fun describe(x: bool):    string { return "bool"; }
+fun describe(x: string):  string { return "string"; }
+
+fun area(side: int32): int32     { return side * side; }
+fun area(r: float64): float64    { return 3.14159 * r * r; }
+
+fun max2(a: int32, b: int32): int32       { if a > b { return a; } return b; }
+fun max2(a: float64, b: float64): float64 { if a > b { return a; } return b; }
+fun max2(a: int64, b: int64): int64       { if a > b { return a; } return b; }
+
+// для A.3.1: одна версия — int64, другая — string
+// int32 аргумент расширится до int64 однозначно
+fun process(x: int64):  string { return "numeric"; }
+fun process(x: string): string { return "text"; }
+
+// exact match должен побить coercion
+fun pick(x: int32): string { return "exact32"; }
+fun pick(x: int64): string { return "exact64"; }
+
+fun main(): int32 {
+    // тест 1: describe — точное совпадение
+    print("тест 1:");
+    print(describe(42i32));
+    print(describe(3.14));
+    print(describe(true));
+    print(describe("hi"));
+    print("");
+
+    // тест 2: area и max2
+    print("тест 2:");
+    print(area(5i32));
+    print(area(3.0));
+    print(max2(10i32, 20i32));
+    print(max2(1.5, 2.5));
+    print(max2(100i64, 200i64));
+    print("");
+
+    // тест 3: coercion int32 -> int64
+    print("тест 3:");
+    val r1 = process(42i32);
+    print(r1);
+    print("");
+
+    // тест 4: exact match выигрывает над coercion
+    print("тест 4:");
+    print(pick(5i32));
+    print(pick(5i64));
+    print("");
+
+    // тест 5: int16 расширяется до int64
+    print("тест 5:");
+    var small: int16 = 7i16;
+    val r2 = process(small);
+    print(r2);
+
+    return 0;
+}

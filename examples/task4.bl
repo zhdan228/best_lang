@@ -1,0 +1,49 @@
+fun digitChar(d: int32): string {
+    if d == 0 { return "0"; }
+    if d == 1 { return "1"; }
+    if d == 2 { return "2"; }
+    if d == 3 { return "3"; }
+    if d == 4 { return "4"; }
+    if d == 5 { return "5"; }
+    if d == 6 { return "6"; }
+    if d == 7 { return "7"; }
+    if d == 8 { return "8"; }
+    return "9";
+}
+
+fun intToStr(n: int32): string {
+    if n == 0 { return "0"; }
+    var s: string = "";
+    var x: int32 = n;
+    while x > 0 {
+        s = digitChar(x % 10) + s;
+        x = x / 10;
+    }
+    return s;
+}
+
+fun printNumberTriangle(n: int32): void {
+    var num: int32 = 1;
+    for var row: int32 = 1; row <= n; row = row + 1 {
+        var line: string = "";
+        for var col: int32 = 1; col <= row; col = col + 1 {
+            if col > 1 { line = line + " "; }
+            line = line + intToStr(num);
+            num = num + 1;
+        }
+        print(line);
+    }
+    print("");
+}
+
+fun main(): int32 {
+    val mas: [int32] = [5, 1, 10, 2, 4, 0];
+    var i: int32 = 0;
+    while i < 6 {
+        // тест i+1
+        print("тест " + intToStr(i + 1) + ":");
+        printNumberTriangle(mas[i]);
+        i = i + 1;
+    }
+    return 0;
+}

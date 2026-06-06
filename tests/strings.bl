@@ -1,0 +1,77 @@
+// строки, символы, конкатенация, сравнение, len
+
+fun repeat(s: string, n: int32): string {
+    var result: string = "";
+    for i in 0..n { result = result + s; }
+    return result;
+}
+
+fun longer(a: string, b: string): string {
+    if a.len() >= b.len() { return a; }
+    return b;
+}
+
+fun main(): int32 {
+    // тест 1: конкатенация и длина
+    print("тест 1:");
+    val hello = "Hello";
+    val world = "World";
+    val msg = hello + ", " + world + "!";
+    print(msg);
+    print(hello.len());
+    print(msg.len());
+    print("");
+
+    // тест 2: сравнение строк
+    print("тест 2:");
+    val s1: string = "abc";
+    val s2: string = "abc";
+    val s3: string = "xyz";
+    print(s1 == s2);
+    print(s1 != s3);
+    print(s1 == s3);
+    print(s2 != s3);
+    print("");
+
+    // тест 3: символы — литералы и сравнение
+    print("тест 3:");
+    val ch1: char = 'A';
+    val ch2: char = 'A';
+    val ch3: char = 'Z';
+    print(ch1 == ch2);
+    print(ch1 != ch3);
+    print(ch1 == ch3);
+    print("");
+
+    // тест 4: символы в массиве
+    print("тест 4:");
+    var chars: [char; 3] = ['h', 'i', '!'];
+    print(chars[0] == 'h');
+    print(chars[1] == 'i');
+    print(chars[2] == '!');
+    print("");
+
+    // тест 5: char as int32 и repeat
+    print("тест 5:");
+    val code: int32 = 'A' as int32;
+    print(code);
+    print(repeat("ab", 3));
+    print(longer("hi", "hello"));
+    print(longer("bye", "ok"));
+    print("");
+
+    // тест 6: escape-последовательности
+    print("тест 6:");
+    print("line1\nline2");
+    print("a\tb");
+    print("");
+
+    // тест 7: nullable строка
+    print("тест 7:");
+    var ms: string? = null;
+    if ms == null { print("null string"); }
+    ms = "filled";
+    if ms != null { print("has string"); }
+
+    return 0;
+}

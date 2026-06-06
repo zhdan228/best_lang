@@ -1,0 +1,114 @@
+/*
+    misc.bl — покрывает оставшиеся фичи:
+    глобальные переменные, унарные операторы, логика,
+    сравнения, именованные аргументы, panic/assert/exit,
+    for-C обратный, блочные комментарии
+*/
+
+// глобальные переменные
+var g_counter: int32 = 0;
+val MAX: int32 = 100;
+val APP_NAME: string = "BestLang";
+
+fun increment(): void {
+    g_counter = g_counter + 1;
+}
+
+fun clamp_to_max(x: int32): int32 {
+    if x > MAX { return MAX; }
+    return x;
+}
+
+fun sign(x: int32): string {
+    if x > 0 { return "positive"; }
+    if x < 0 { return "negative"; }
+    return "zero";
+}
+
+fun main(): int32 {
+    // тест 1: глобальные переменные
+    print("тест 1:");
+    print(g_counter);
+    increment(); increment(); increment();
+    print(g_counter);
+    print(MAX);
+    print(APP_NAME);
+    print(clamp_to_max(150));
+    print(clamp_to_max(50));
+
+    // тест 2: унарный минус и not
+    print("тест 2:");
+    var x: int32 = 5;
+    var neg: int32 = -x;
+    print(neg);
+    var y: float64 = 3.14;
+    print(-y);
+    var flag: bool = true;
+    print(not flag);
+    print(not false);
+
+    // тест 3: логические and / or
+    print("тест 3:");
+    val t: bool = true;
+    val f: bool = false;
+    print(t and t);
+    print(t and f);
+    print(f or t);
+    print(f or f);
+    val nottor = (not t) or (not f);
+    print(nottor);
+    val a: int32 = 5;
+    print(a > 0 and a < 10);
+    print(a < 0 or a > 3);
+
+    // тест 4: все операторы сравнения
+    print("тест 4:");
+    val p: int32 = 10;
+    val q: int32 = 20;
+    print(p == q);
+    print(p != q);
+    print(p <  q);
+    print(p <= q);
+    print(p >  q);
+    print(p >= q);
+    print(p >= 10);
+    print(p <= 10);
+
+    // тест 5: именованные аргументы print(end=)
+    print("тест 5:");
+    for i in 1..6 {
+        print(i, end=" ");
+    }
+    print("");
+    print("hello", end=", ");
+    print("world", end="!\n");
+
+    // тест 6: for-C обратный отсчёт
+    print("тест 6:");
+    for var i: int32 = 5; i > 0; i = i - 1 {
+        print(i);
+    }
+
+    // тест 7: sign — унарный минус в выражении
+    print("тест 7:");
+    print(sign(42));
+    print(sign(-7));
+    print(sign(0));
+    print(sign(-x));
+
+    // тест 8: assert (не падает при true)
+    print("тест 8:");
+    assert(1 == 1, "1 должно равняться 1");
+    assert(MAX == 100, "MAX должно быть 100");
+    print("asserts passed");
+
+    // тест 9: блочный комментарий
+    print("тест 9:");
+    /* этот комментарий
+       занимает несколько строк
+       и никак не влияет на результат */
+    val result = 2 + 2; /* inline блочный */
+    print(result);
+
+    return 0;
+}

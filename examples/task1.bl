@@ -1,0 +1,63 @@
+// Классификатор чисел
+
+fun intToStr(n: int32): string {
+    if n == 0 { return "0"; }
+    var s: string = "";
+    var x: int32 = n;
+    if x < 0 { x = 0 - x; }
+    while x > 0 {
+        val d: int32 = x % 10;
+        if d == 0 { s = "0" + s; } else if d == 1 { s = "1" + s; }
+        else if d == 2 { s = "2" + s; } else if d == 3 { s = "3" + s; }
+        else if d == 4 { s = "4" + s; } else if d == 5 { s = "5" + s; }
+        else if d == 6 { s = "6" + s; } else if d == 7 { s = "7" + s; }
+        else if d == 8 { s = "8" + s; } else { s = "9" + s; }
+        x = x / 10;
+    }
+    return s;
+}
+
+fun isPrime(n: int32): bool {
+    if n < 2 { return false; }
+    var i: int32 = 2;
+    while i * i <= n {
+        if n % i == 0 { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fun classifyNumber(n: int32): void {
+    if n % 2 == 0 {
+        if n > 100 {
+            print("BigEven");
+        } else if n > 10{
+            print("MediumEven");
+        } else {
+            print("SmallEven");
+        }
+    } else {
+        if n >= 100 and n <= 999 {
+            print("OddThreeDigit");
+        } else if n < 0 {
+            print("NegativeOdd");
+        } else if isPrime(n) {
+            print("PrimeOdd");
+        } else {
+            print("Other");
+        }
+    }
+}
+
+fun main(): int32 {
+    val mas: [int32] = [1, 2, 3, 4, 53, 5, 34, 53, 45, 3, 2, 2, 5, 325, 43, 5, 4, -3, -3];
+    var i: int32 = 0;
+    while i < 19 {
+        // тест i+1
+        print("тест " + intToStr(i + 1) + ":");
+        classifyNumber(mas[i]);
+        print("");
+        i = i + 1;
+    }
+    return 0;
+}

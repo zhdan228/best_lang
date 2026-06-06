@@ -1,0 +1,135 @@
+// Крестики-нолики
+
+struct Board {
+    r0: [char; 3];
+    r1: [char; 3];
+    r2: [char; 3];
+}
+
+fun getCell(b: Board, row: int32, col: int32): char {
+    if row == 0 { return b.r0[col]; }
+    if row == 1 { return b.r1[col]; }
+    return b.r2[col];
+}
+
+fun charToResult(ch: char): int32 {
+    if ch == 'X' { return 1; }
+    if ch == 'O' { return 2; }
+    return 0;
+}
+
+fun checkLine(a: char, b: char, c: char): int32 {
+    if a == b and b == c and a != '.' {
+        return charToResult(a);
+    }
+    return 0;
+}
+
+fun checkWinner(b: Board): int32 {
+    var w: int32 = 0;
+
+    w = checkLine(b.r0[0], b.r0[1], b.r0[2]);
+    if w != 0 { return w; }
+    w = checkLine(b.r1[0], b.r1[1], b.r1[2]);
+    if w != 0 { return w; }
+    w = checkLine(b.r2[0], b.r2[1], b.r2[2]);
+    if w != 0 { return w; }
+
+    
+    w = checkLine(getCell(b, 0, 0), getCell(b, 1, 0), getCell(b, 2, 0));
+    if w != 0 { return w; }
+    w = checkLine(getCell(b, 0, 1), getCell(b, 1, 1), getCell(b, 2, 1));
+    if w != 0 { return w; }
+    w = checkLine(getCell(b, 0, 2), getCell(b, 1, 2), getCell(b, 2, 2));
+    if w != 0 { return w; }
+
+    w = checkLine(getCell(b, 0, 0), getCell(b, 1, 1), getCell(b, 2, 2));
+    if w != 0 { return w; }
+    w = checkLine(getCell(b, 0, 2), getCell(b, 1, 1), getCell(b, 2, 0));
+    if w != 0 { return w; }
+
+    return 0;
+}
+
+fun printResult(result: int32): void {
+    if result == 1 {
+        print("X wins");
+    } else if result == 2 {
+        print("O wins");
+    } else {
+        print("No winner");
+    }
+}
+
+fun main(): int32 {
+    // тест 1: горизонталь X
+    print("тест 1:");
+    val b1: Board = Board {
+        r0: ['X', 'X', 'X'],
+        r1: ['O', '.', 'O'],
+        r2: ['.', 'O', '.']
+    };
+    printResult(checkWinner(b1));
+    print("");
+
+    // тест 2: вертикаль O
+    print("тест 2:");
+    val b2: Board = Board {
+        r0: ['X', 'O', 'X'],
+        r1: ['.', 'O', '.'],
+        r2: ['X', 'O', '.']
+    };
+    printResult(checkWinner(b2));
+    print("");
+
+    // тест 3: главная диагональ X
+    print("тест 3:");
+    val b3: Board = Board {
+        r0: ['X', 'O', '.'],
+        r1: ['O', 'X', '.'],
+        r2: ['.', 'O', 'X']
+    };
+    printResult(checkWinner(b3));
+    print("");
+
+    // тест 4: побочная диагональ O
+    print("тест 4:");
+    val b4: Board = Board {
+        r0: ['.', 'X', 'O'],
+        r1: ['X', 'O', '.'],
+        r2: ['O', '.', 'X']
+    };
+    printResult(checkWinner(b4));
+    print("");
+
+    // тест 5: ничья
+    print("тест 5:");
+    val b5: Board = Board {
+        r0: ['X', 'O', 'X'],
+        r1: ['X', 'X', 'O'],
+        r2: ['O', 'X', 'O']
+    };
+    printResult(checkWinner(b5));
+    print("");
+
+    // тест 6: игра не окончена
+    print("тест 6:");
+    val b6: Board = Board {
+        r0: ['X', 'O', '.'],
+        r1: ['.', 'X', '.'],
+        r2: ['.', '.', '.']
+    };
+    printResult(checkWinner(b6));
+    print("");
+
+    // тест 7: нет победителя при заполненной доске
+    print("тест 7:");
+    val b7: Board = Board {
+        r0: ['X', 'O', 'X'],
+        r1: ['X', 'X', 'O'],
+        r2: ['.', 'O', 'O']
+    };
+    printResult(checkWinner(b7));
+
+    return 0;
+}

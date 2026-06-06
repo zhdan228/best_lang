@@ -1,0 +1,97 @@
+// статические и динамические массивы, сортировка, кортежи, nullable
+
+fun sum5(a: [int32; 5]): int32 {
+    var s: int32 = 0;
+    for i in 0..5 { s = s + a[i]; }
+    return s;
+}
+
+fun find5(a: [int32; 5], target: int32): int32? {
+    for i in 0..5 {
+        if a[i] == target { return i; }
+    }
+    return null;
+}
+
+// сортировка вставками статического массива
+fun insertion_sort(a: [int32; 6]): [int32; 6] {
+    for i in 1..6 {
+        val key = a[i];
+        var j: int32 = i - 1;
+        while j >= 0 {
+            if a[j] <= key { break; }
+            a[j + 1] = a[j];
+            j = j - 1;
+        }
+        a[j + 1] = key;
+    }
+    return a;
+}
+
+fun div_rem(a: int32, b: int32): (int32, int32) {
+    return (a / b, a % b);
+}
+
+fun main(): int32 {
+    // тест 1: статический массив
+    print("тест 1:");
+    var arr: [int32; 5] = [3, 1, 4, 1, 5];
+    print(arr[0]); print(arr[4]);
+    arr[2] = 99;
+    print(arr[2]);
+    print(sum5(arr));
+    print("");
+
+    // тест 2: nullable поиск
+    print("тест 2:");
+    val idx = find5(arr, 99);
+    if idx != null { print("found at"); print(idx); }
+    val idx2 = find5(arr, 35);
+    if idx2 == null { print("not found"); }
+    print("");
+
+    // тест 3: сортировка вставками
+    print("тест 3:");
+    var unsorted: [int32; 6] = [5, 2, 8, 1, 9, 3];
+    val sorted = insertion_sort(unsorted);
+    for i in 0..6 { print(sorted[i]); }
+    print("");
+
+    // тест 4: динамический массив
+    print("тест 4:");
+    var dyn: [int32] = [];
+    dyn.push(10); dyn.push(20); dyn.push(30);
+    print(dyn.len());
+    print(dyn.get(0));
+    print(dyn.get(1));
+    val popped = dyn.pop();
+    print(popped);
+    print(dyn.len());
+    print("");
+
+    // тест 5: фильтрация
+    print("тест 5:");
+    var src: [int32] = [1, 2, 3, 4, 5, 6, 7, 8];
+    var evens: [int32] = [];
+    var i: int32 = 0;
+    val src_len: int32 = src.len() as int32;
+    while i < src_len {
+        val v = src.get(i);
+        if v % 2 == 0 { evens.push(v); }
+        i = i + 1;
+    }
+    val elen = evens.len() as int32;
+    for k in 0..elen { print(evens.get(k)); }
+    print("");
+
+    // тест 6: кортежи
+    print("тест 6:");
+    val qr = div_rem(17, 5);
+    print(qr.0); print(qr.1);
+    val trip = (1, 3.14, true);
+    print(trip.0); print(trip.1); print(trip.2);
+    val swapped: (string, int32) = ("hello", 38);
+    print(swapped.0); print(swapped.1);
+
+    return 0;
+}
