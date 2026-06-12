@@ -109,9 +109,10 @@ struct ToInt      { Operand dst; Operand src; }; // to_int(s)  → int32
 struct ToFloat    { Operand dst; Operand src; }; // to_float(s) → float64
 struct Exit  { Operand code; };
 struct Panic { Operand msg;  };
+struct LineInfo { uint32_t line; };
 
 using Instr = std::variant<
-    Label,
+    Label, LineInfo,
     IBinInstr, FBinInstr, LBinInstr,
     IUnInstr, FUnInstr, LUnInstr,
     Copy,

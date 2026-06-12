@@ -104,6 +104,7 @@ struct FnGen {
     void emit    (uint8_t  op) { write_u8 (code, op); }
     void emit_u8 (uint8_t  v)  { write_u8 (code, v);  }
     void emit_u16(uint16_t v)  { write_u16(code, v);  }
+    void emit_u32(uint32_t v)  { write_u32(code, v);  }
     void emit_i16(int16_t  v)  { write_i16(code, v);  }
 
     void emit_jump(uint8_t op, const std::string& label) {
@@ -131,6 +132,7 @@ struct FnGen {
     void pop_to(const IR::Operand& dst);
 
     void gen(const IR::Label&      v) { label_offsets[v.name] = code.size(); }
+    void gen(const IR::LineInfo&   v) { emit(Op::LINE); emit_u32(v.line); }
     void gen(const IR::IBinInstr&  v) {
         push_operand(v.lhs); push_operand(v.rhs);
         emit_ibin_op(v.op, v.is_unsigned);

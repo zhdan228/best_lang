@@ -575,6 +575,8 @@ static void lower_for_c(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
 }
 
 static void lower_stmt(const Stmt& s, FnCtx& ctx, IRProgram& prog) {
+    if (s.loc.line > 0 && s.kind != Stmt::Kind::Empty && s.kind != Stmt::Kind::Block)
+        ctx.emit(IR::LineInfo{s.loc.line});
     switch (s.kind) {
     case Stmt::Kind::Empty:    break;
     case Stmt::Kind::VarDecl:  lower_vardecl(s, ctx, prog); break;

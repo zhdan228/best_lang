@@ -563,6 +563,11 @@ Value VMState::call_function(uint16_t fn_idx, std::vector<Value> args) {
             if(frames.empty()) return ret;
             code=frames.back().fn->code; push(ret); break;
         }
+        case Op::LINE: {
+            uint32_t ln = (uint32_t)code[pc] | ((uint32_t)code[pc+1]<<8)
+                        | ((uint32_t)code[pc+2]<<16) | ((uint32_t)code[pc+3]<<24);
+            pc += 4; current_line = ln; break;
+        }
         case Op::POP: pop_val(); break;
         case Op::DUP: push(top()); break;
         case Op::STR_CONCAT: {

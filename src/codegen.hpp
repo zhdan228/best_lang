@@ -110,6 +110,7 @@ namespace Op {
     constexpr uint8_t TO_FLOAT    = 0xB8;
     constexpr uint8_t TO_CHAR     = 0xB9;
     constexpr uint8_t CHAR_TO_INT = 0xBA;
+    constexpr uint8_t LINE        = 0xBB; // LINE u32 — обновить текущую строку в VM
 }
 
 namespace CtTag {
